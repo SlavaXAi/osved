@@ -8,6 +8,7 @@
 .ruff_cache
 data
 exports
+osved-backups
 output
 outputs
 research
