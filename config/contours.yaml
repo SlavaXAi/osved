@@ -1,0 +1,414 @@
+version: 2
+aliases:
+  company_capital: startups
+  china_manufacturing: world_economy
+  physical_economy: startups
+  philosophy_civilization: human_civilization
+contours:
+- id: startups
+  title: Стартапы и технологические компании
+  mission: 'Видеть новые рынки, продукты и бизнес-модели через реальные действия компаний:
+    спрос, первые клиенты, внедрение, стоимость продукта и изменение экономики. YC,
+    a16z и другие экосистемы служат радарами; размер раунда сам по себе не повод.'
+  include_topics:
+  - startups
+  - venture_capital
+  - business_models
+  - yc
+  - a16z
+  - company_economics
+  - fintech
+  - unit_economics
+  - robotics
+  - manufacturing
+  - construction
+  include_keywords:
+  - startup
+  - стартап
+  - y combinator
+  - a16z
+  - andreessen horowitz
+  - venture
+  - венчур
+  - product-market fit
+  - бизнес-модел
+  - unit economics
+  - paying customers
+  - платящих клиент
+  - коммерческое внедрение
+  - серийн
+  - производств
+  - фабрик
+  - factory
+  - product launch
+  - launch customer
+  - 初创公司
+  - 创业
+  exclude_keywords:
+  - startup weekend
+  - конкурс стартапов
+  - price target
+  - stock tip
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - cis
+  - europe
+  - east_asia
+  key_questions:
+  - Какую реальную проблему решает продукт и кто за это платит?
+  - Что изменилось в спросе, модели продаж или экономике бизнеса?
+  - Какой рынок или возможность здесь проявляется помимо размера раунда?
+  max_age_days: 5
+  search_lens_ids:
+  - startup_capital
+  - company_capital
+  - physical_economy
+  - personal_rare_signals
+  - frontier_global
+  source_hints: []
+- id: ai_software
+  title: AI и software
+  mission: Находить измеримые изменения возможностей моделей, агентов, интерфейсов
+    и программной автоматизации, в том числе в финансах, строительстве и B2B. Понимать
+    практические ограничения, внедрение и сравнения, сохраняя широкий круг компаний.
+  include_topics:
+  - ai
+  - agents
+  - frontier_ai
+  - enterprise_ai
+  - open_source_ai
+  - software
+  - open_source
+  - voice
+  - automation
+  include_keywords:
+  - artificial intelligence
+  - machine learning
+  - ai agent
+  - ai model
+  - foundation model
+  - агент
+  - нейросет
+  - llm
+  - benchmark
+  - inference
+  - open source model
+  - автоматизац
+  - ai coding
+  - coding agent
+  - искусственный интеллект
+  - 大模型
+  - 人工智能
+  - 智能体
+  exclude_keywords:
+  - minor patch
+  - ui tweak
+  - косметическое обновление
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - cis
+  - europe
+  - east_asia
+  key_questions:
+  - Какую измеримую задачу теперь можно решить?
+  - Что изменилось относительно доступных альтернатив, включая ограничения?
+  - Есть ли применение, воспроизводимый benchmark или открытый продукт?
+  max_age_days: 5
+  search_lens_ids:
+  - frontier_global
+  - china_asia_industry
+  - personal_rare_signals
+  source_hints: []
+- id: space
+  title: Космос
+  mission: 'Понимать развитие космических возможностей: запуски, спутники, связь,
+    исследования, орбитальная инфраструктура и экономика доступа к космосу. Следить
+    за SpaceX, китайскими компаниями, Роскосмосом и другими участниками через реальные
+    достижения.'
+  include_topics:
+  - space
+  - spaceflight
+  - satellites
+  - launch_vehicles
+  - orbital_infrastructure
+  - space_economy
+  include_keywords:
+  - spacex
+  - nasa
+  - roscosmos
+  - роскосмос
+  - launch vehicle
+  - satellite
+  - spacecraft
+  - starship
+  - космос
+  - космическ
+  - спутник
+  - орбит
+  - ракет-носител
+  - rocket launch
+  - reusable rocket
+  - space station
+  - lunar mission
+  - 航天
+  - 卫星
+  - 火箭
+  exclude_keywords:
+  - concept art
+  - speculative render
+  - cryptocurrency to the moon
+  regions:
+  - global
+  - china
+  - united_states
+  - russia
+  - cis
+  - europe
+  - east_asia
+  key_questions:
+  - Какое космическое достижение или испытание действительно произошло?
+  - Как меняются доступность, надёжность, стоимость или возможности?
+  - Это работающая система, испытание или пока заявленный проект?
+  max_age_days: 5
+  search_lens_ids:
+  - space
+  - physical_economy
+  - frontier_global
+  - china_asia_industry
+  - russia_cis_dual_use
+  source_hints: []
+- id: world_economy
+  title: Мировая экономика и торговля
+  mission: 'Видеть реальные изменения движения денег, ресурсов и товаров между странами:
+    ФРС, доллар, расчёты в других валютах, торговлю БРИКС, тарифы, поставки и промышленную
+    политику. Проверять тезисы о дедолларизации данными, а не лозунгами.'
+  include_topics:
+  - macroeconomics
+  - world_economy
+  - trade
+  - currencies
+  - rates
+  - commodities
+  - industrial_policy
+  - supply_chains
+  include_keywords:
+  - interest rate
+  - central bank
+  - federal reserve
+  - trade balance
+  - tariff
+  - dollar
+  - commodity
+  - bilateral trade
+  - trade agreement
+  - supply chain
+  - inflation
+  - ставка
+  - фрс
+  - инфляц
+  - доллар
+  - торговл
+  - экспорт
+  - импорт
+  - брикс
+  - brics
+  - пошлин
+  - расчёт в национальн
+  - дедолларизац
+  - ресурсные поставки
+  - 贸易
+  - 关税
+  - 美元
+  exclude_keywords:
+  - daily market recap
+  - technical analysis
+  - stock tip
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - cis
+  - europe
+  - east_asia
+  key_questions:
+  - Какое правило, поток ресурсов, товаров или капитала изменился?
+  - Подтверждают ли данные заявления об экономических блоках и валютах?
+  - Какие условия для компаний и отраслей теперь другие?
+  max_age_days: 5
+  search_lens_ids:
+  - world_economy
+  - world_strategy
+  - china_asia_industry
+  source_hints: []
+- id: geopolitics
+  title: Геополитика и военные технологии
+  mission: Понимать действия государств и союзов, технологический суверенитет, санкции
+    и влияние военных технологий на баланс сил. Россия и Украина, Тайвань, Азия, Ближний
+    Восток, США и НАТО входят в контекст; заявления и последствия проверяются отдельно.
+  include_topics:
+  - geopolitics
+  - defense_technology
+  - military_technology
+  - sanctions
+  - sovereignty
+  - alliances
+  include_keywords:
+  - geopolit
+  - sanction
+  - alliance
+  - treaty
+  - export control
+  - defense
+  - military
+  - anduril
+  - palantir
+  - nato
+  - геополит
+  - санкц
+  - союз
+  - военный договор
+  - войн
+  - оборон
+  - суверен
+  - экспортный контроль
+  - дронниц
+  - чадаев
+  - военн
+  - 军事
+  - 制裁
+  exclude_keywords:
+  - партийный скандал
+  - election gossip
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - cis
+  - europe
+  - east_asia
+  key_questions:
+  - Какое действие государства, союза или оборонной компании произошло?
+  - Как меняются ресурсы, технологии или свобода действий сторон?
+  - Где подтверждённый факт, официальная позиция и интерпретация?
+  max_age_days: 5
+  search_lens_ids:
+  - geopolitics
+  - world_strategy
+  - russia_cis_dual_use
+  source_hints: []
+- id: people_institutions
+  title: Люди и институты
+  mission: Следить за новыми действиями и содержательными заявлениями лидеров индустрии,
+    политиков, фондов, университетов и исследовательских институтов. Сопоставлять
+    интервью с прежними позициями и действиями, включая братьев Либерманов.
+  include_topics:
+  - leadership
+  - public_statements
+  - universities
+  - funds
+  - institutions
+  - technology_strategy
+  include_keywords:
+  - ceo said
+  - founder said
+  - interview
+  - keynote
+  - testimony
+  - заявил
+  - выступил
+  - интервью
+  - университет
+  - research institute
+  - policy speech
+  - братья либерман
+  - либерман
+  - liberman
+  - lieberman
+  exclude_keywords:
+  - celebrity gossip
+  - личная жизнь
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - europe
+  - east_asia
+  key_questions:
+  - Появился ли существенный тезис, решение или изменение позиции?
+  - Что подтверждает сказанное, и что пока остаётся мнением?
+  - Как это связано с действиями человека или института?
+  max_age_days: 7
+  search_lens_ids:
+  - people_institutions
+  - frontier_global
+  - frontier_ideas
+  source_hints: []
+- id: human_civilization
+  title: Философия, человек и цивилизация
+  mission: Изучать вопросы будущего, сознания, цифровой жизни, внимания и человеческих
+    институтов. Замечать новые научные работы, технофилософские дискуссии и умные
+    мемы на форумах, явно различая результаты, гипотезы, философию и фантастику.
+  include_topics:
+  - attention
+  - education
+  - culture
+  - civilization
+  - ai_society
+  - consciousness
+  - ai_welfare
+  - longevity
+  - future_studies
+  - frontier_science_and_ideas
+  - philosophy
+  include_keywords:
+  - consciousness
+  - ai welfare
+  - whole brain emulation
+  - longevity
+  - acausal
+  - philosophy
+  - transhuman
+  - simulation
+  - attention economy
+  - digital mind
+  - сознан
+  - философ
+  - цивилизац
+  - долголет
+  - цифровые страдания
+  - эмуляция мозга
+  - трансгуман
+  - технофилософ
+  - бессмерти
+  - манипуляция вниманием
+  - 意识
+  - 哲学
+  exclude_keywords:
+  - celebrity gossip
+  - лайфхак дня
+  regions:
+  - global
+  - united_states
+  - china
+  - russia
+  - europe
+  - east_asia
+  key_questions:
+  - Какой вопрос о будущем или человеке помогает понять материал?
+  - Это наблюдение, гипотеза, формальная модель, философия или fiction?
+  - Что нового появилось в дискуссии и какие сильные возражения есть?
+  max_age_days: 5
+  search_lens_ids:
+  - human_civilization
+  - frontier_ideas
+  - personal_rare_signals
+  source_hints: []

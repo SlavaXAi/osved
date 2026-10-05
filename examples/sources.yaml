@@ -1,0 +1,36 @@
+version: 1
+sources:
+- id: rss_openai_news
+  name: OpenAI News
+  kind: rss
+  locator: https://openai.com/news/rss.xml
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: united_states
+  language: en
+  topics:
+  - ai
+  - agents
+  - research
+  - technology_economy
+  poll_interval_minutes: 60
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 12
+- id: github_langchain_releases
+  name: LangChain releases
+  kind: github
+  locator: langchain-ai/langchain
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: global
+  language: en
+  topics: [ai, agents, open_source]
+  poll_interval_minutes: 120
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 5

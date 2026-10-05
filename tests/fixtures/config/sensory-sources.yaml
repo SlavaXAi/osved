@@ -1,0 +1,262 @@
+version: 1
+sources:
+- id: x_for_you
+  name: X — персональная For You (видимые посты)
+  kind: x
+  locator: https://x.com/home
+  adapter_id: browser_x
+  strategy: for_you
+  admission_mode: trigger_only
+  role: radar
+  enabled: false
+  region: global
+  language: en
+  topics:
+  - ai
+  - startups
+  - people
+  - exploration
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 6
+  monthly_cost_cap_usd: 0
+- id: x_search_agents
+  name: X — агенты и практическое применение AI
+  kind: x
+  locator: ("AI agent" OR "coding agent" OR "agent infrastructure") (release OR launch
+    OR benchmark) -filter:retweets
+  adapter_id: x_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - ai
+  - agents
+  - software
+  - automation
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 6
+  monthly_cost_cap_usd: 0.15
+- id: x_search_startups
+  name: X — стартапы и новые продукты
+  kind: x
+  locator: ("Y Combinator" OR "a16z" OR "startup launch") (product OR customer OR
+    launched) -filter:retweets
+  adapter_id: x_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - startups
+  - business_models
+  - software
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 6
+  monthly_cost_cap_usd: 0.15
+- id: x_search_space
+  name: X — космос и новые возможности
+  kind: x
+  locator: (SpaceX OR "space startup" OR "commercial space" OR "Chinese rocket") (launch
+    OR test OR satellite) -filter:retweets
+  adapter_id: x_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - space
+  - satellites
+  - infrastructure
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08
+- id: x_search_geotech
+  name: X — технологии, безопасность и торговля
+  kind: x
+  locator: (Anduril OR Palantir OR "export controls" OR "autonomous drones") (technology
+    OR deployment OR agreement) -filter:retweets
+  adapter_id: x_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - geopolitics
+  - trade
+  - military_technology
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08
+- id: reddit_localllama
+  name: Reddit — LocalLLaMA
+  kind: reddit
+  locator: LocalLLaMA
+  adapter_id: reddit_monid
+  strategy: new
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - ai
+  - models
+  - opensource
+  - software
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 8
+  monthly_cost_cap_usd: 0.15
+  options:
+    per_call_price_cap_usd: 0.0015
+    cache_ttl_minutes: 60
+- id: reddit_singularity
+  name: Reddit — Singularity
+  kind: reddit
+  locator: singularity
+  adapter_id: reddit_monid
+  strategy: hot
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - ai
+  - philosophy
+  - consciousness
+  - civilization
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08
+  options:
+    per_call_price_cap_usd: 0.0015
+    cache_ttl_minutes: 60
+- id: reddit_space
+  name: Reddit — Space
+  kind: reddit
+  locator: space
+  adapter_id: reddit_monid
+  strategy: hot
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - space
+  - science
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08
+  options:
+    per_call_price_cap_usd: 0.0015
+    cache_ttl_minutes: 60
+- id: youtube_ycombinator
+  name: YouTube — Y Combinator
+  kind: youtube
+  locator: UCcefcZRL2oaA_uBNeo5UOWg
+  adapter_id: youtube_rss
+  strategy: channel_uploads
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - startups
+  - ai
+  - business_models
+  poll_interval_minutes: 240
+  daily_call_cap: 6
+  daily_candidate_cap: 15
+- id: youtube_lexfridman
+  name: YouTube — Lex Fridman
+  kind: youtube
+  locator: UCSHZKyawb77ixDdsGog4iWA
+  adapter_id: youtube_rss
+  strategy: channel_uploads
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - people
+  - ai
+  - philosophy
+  - science
+  poll_interval_minutes: 240
+  daily_call_cap: 6
+  daily_candidate_cap: 15
+- id: v2ex_technology
+  name: V2EX — китайские технологические обсуждения
+  kind: v2ex
+  locator: latest
+  adapter_id: v2ex_public
+  strategy: latest
+  admission_mode: trigger_only
+  role: radar
+  region: china
+  language: zh
+  topics:
+  - software
+  - ai
+  - startups
+  - china
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 6
+  options:
+    nodes:
+    - ai
+    - programmer
+    - python
+    - share
+    - create
+    - dev
+- id: weibo_ai_search
+  name: Weibo — AI и китайские технологические компании
+  kind: weibo
+  locator: 人工智能 发布
+  adapter_id: weibo_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  enabled: false
+  region: china
+  language: zh
+  topics:
+  - ai
+  - software
+  - china
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08
+- id: zhihu_technology_search
+  name: Zhihu — AI и технологический бизнес
+  kind: zhihu
+  locator: 人工智能 创业
+  adapter_id: zhihu_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  enabled: false
+  region: china
+  language: zh
+  topics:
+  - ai
+  - startups
+  - china
+  poll_interval_minutes: 1440
+  daily_call_cap: 1
+  daily_candidate_cap: 4
+  monthly_cost_cap_usd: 0.08

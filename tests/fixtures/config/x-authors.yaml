@@ -1,0 +1,452 @@
+version: 1
+authors:
+- handle: peteskomoroch
+  name: Pete Skomoroch
+  topics:
+  - ai_engineering
+  - agents
+  - startups
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: russelljkaplan
+  name: Russell Kaplan
+  topics:
+  - ai_engineering
+  - agents
+  - autonomous_systems
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: rossdawson
+  name: Ross Dawson
+  topics:
+  - ai_strategy
+  - future_of_work
+  - organizations
+  initial_tier: active
+  enabled: false
+  weekly_persona: false
+- handle: erikbryn
+  name: Erik Brynjolfsson
+  topics:
+  - ai_economics
+  - productivity
+  - labor
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: antgrasso
+  name: Antonio Grasso
+  topics:
+  - technology_news
+  - digital_economy
+  - enterprise_ai
+  initial_tier: stream
+  enabled: false
+  weekly_persona: false
+- handle: drjimfan
+  name: Jim Fan
+  topics:
+  - robotics
+  - embodied_ai
+  - simulation
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: PaulYacoubian
+  name: Paul Yacoubian
+  topics:
+  - ai_investing
+  - startups
+  - technology_economy
+  initial_tier: active
+  enabled: false
+  weekly_persona: false
+- handle: v_vashishta
+  name: Vin Vashishta
+  topics:
+  - applied_ai
+  - ai_business
+  - reliability
+  initial_tier: active
+  enabled: false
+  weekly_persona: false
+- handle: ttunguz
+  name: Tomasz Tunguz
+  topics:
+  - venture_capital
+  - ai_companies
+  - saas
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: pmddomingos
+  name: Pedro Domingos
+  topics:
+  - machine_learning
+  - ai_research
+  - ai_policy
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: GaryMarcus
+  name: Gary Marcus
+  topics:
+  - ai_limits
+  - ai_safety
+  - ai_policy
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: HMsheikh4
+  name: Humayun Sheikh
+  topics:
+  - agent_economy
+  - deep_tech
+  - crypto_ai
+  initial_tier: sparse
+  enabled: false
+  weekly_persona: false
+- handle: jackclarkSF
+  name: Jack Clark
+  topics:
+  - ai_policy
+  - ai_economics
+  - frontier_ai
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: akorinek
+  name: Anton Korinek
+  topics:
+  - agi_economics
+  - labor
+  - macroeconomics
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: conorsen
+  name: Conor Sen
+  topics:
+  - macroeconomics
+  - ai_economics
+  - markets
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: rodneyabrooks
+  name: Rodney Brooks
+  topics:
+  - robotics
+  - embodied_ai
+  - technology_limits
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: tessalau
+  name: Tessa Lau
+  topics:
+  - construction_technology
+  - robotics
+  - industrial_ai
+  initial_tier: sparse
+  enabled: false
+  weekly_persona: false
+- handle: JeffDean
+  name: Jeff Dean
+  topics:
+  - ai_research
+  - compute_infrastructure
+  - machine_learning
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: rowancheung
+  name: Rowan Cheung
+  topics:
+  - ai_news
+  - ai_products
+  - ai_business
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: karpathy
+  name: Andrej Karpathy
+  topics:
+  - ai_engineering
+  - neural_networks
+  - education
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: ylecun
+  name: Yann LeCun
+  topics:
+  - ai_research
+  - robotics
+  - world_models
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: JensenHuang
+  name: Jensen Huang
+  topics:
+  - semiconductors
+  - ai_infrastructure
+  - robotics
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: true
+- handle: ilyasut
+  name: Ilya Sutskever
+  topics:
+  - frontier_ai
+  - superintelligence
+  - ai_safety
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: sama
+  name: Sam Altman
+  topics:
+  - frontier_ai
+  - ai_strategy
+  - technology_economy
+  initial_tier: active
+  enabled: true
+  weekly_persona: true
+- handle: ycombinator
+  name: Y Combinator
+  topics:
+  - startup_news
+  - ai_startups
+  - venture_capital
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: a16z
+  name: Andreessen Horowitz
+  topics:
+  - venture_capital
+  - ai_infrastructure
+  - technology_economy
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: sequoia
+  name: Sequoia Capital
+  topics:
+  - venture_capital
+  - ai_companies
+  - startup_news
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: accel
+  name: Accel
+  topics:
+  - venture_capital
+  - enterprise_ai
+  - startup_news
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: geoffreyhinton
+  name: Geoffrey Hinton
+  topics:
+  - ai_research
+  - ai_safety
+  - superintelligence
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: AndrewYNg
+  name: Andrew Ng
+  topics:
+  - applied_ai
+  - ai_education
+  - ai_business
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: drfeifei
+  name: Fei-Fei Li
+  topics:
+  - computer_vision
+  - spatial_intelligence
+  - robotics
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: alliekmiller
+  name: Allie K. Miller
+  topics:
+  - enterprise_ai
+  - ai_business
+  - ai_adoption
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: mattshumer_
+  name: Matt Shumer
+  topics:
+  - ai_news
+  - llm_products
+  - automation
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: OfficialLoganK
+  name: Logan Kilpatrick
+  topics:
+  - ai_products
+  - developer_tools
+  - frontier_ai
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: Ronald_vanLoon
+  name: Ronald van Loon
+  topics:
+  - technology_news
+  - enterprise_ai
+  - data
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: BernardMarr
+  name: Bernard Marr
+  topics:
+  - technology_news
+  - ai_business
+  - data_strategy
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: kaifulee
+  name: Kai-Fu Lee
+  topics:
+  - china_ai
+  - ai_economics
+  - venture_capital
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: demishassabis
+  name: Demis Hassabis
+  topics:
+  - frontier_ai
+  - ai_for_science
+  - agi
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: true
+- handle: gdb
+  name: Greg Brockman
+  topics:
+  - frontier_ai
+  - ai_engineering
+  - compute_infrastructure
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: jeremyphoward
+  name: Jeremy Howard
+  topics:
+  - applied_ai
+  - machine_learning
+  - ai_education
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: AravSrinivas
+  name: Aravind Srinivas
+  topics:
+  - ai_search
+  - ai_products
+  - startups
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: lexfridman
+  name: Lex Fridman
+  topics:
+  - technology_interviews
+  - ai_research
+  - robotics
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: soumithchintala
+  name: Soumith Chintala
+  topics:
+  - machine_learning
+  - ai_infrastructure
+  - robotics
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: cynthiabreazeal
+  name: Cynthia Breazeal
+  topics:
+  - social_robotics
+  - human_robot_interaction
+  - embodied_ai
+  initial_tier: sparse
+  enabled: false
+  weekly_persona: false
+- handle: KirkDBorne
+  name: Kirk Borne
+  topics:
+  - technology_news
+  - machine_learning
+  - space
+  initial_tier: stream
+  enabled: false
+  weekly_persona: false
+- handle: emollick
+  name: Ethan Mollick
+  topics:
+  - applied_ai
+  - future_of_work
+  - ai_business
+  initial_tier: active
+  enabled: true
+  weekly_persona: false
+- handle: ID_AA_Carmack
+  name: John Carmack
+  topics:
+  - agi
+  - compute_infrastructure
+  - ai_engineering
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: petitegeek
+  name: Angelica Lim
+  topics:
+  - humanoid_robots
+  - human_robot_interaction
+  - embodied_ai
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false
+- handle: StanfordHAI
+  name: Stanford HAI
+  topics:
+  - ai_research
+  - ai_policy
+  - ai_events
+  initial_tier: stream
+  enabled: true
+  weekly_persona: false
+- handle: hodlipson
+  name: Hod Lipson
+  topics:
+  - robotics
+  - embodied_ai
+  - autonomous_systems
+  initial_tier: sparse
+  enabled: true
+  weekly_persona: false

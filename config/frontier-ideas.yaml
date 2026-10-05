@@ -1,0 +1,192 @@
+version: 1
+lens:
+  id: frontier_ideas
+  title: Край карты — пограничные идеи
+  enabled: false
+  prompt_version: frontier_ideas_v1
+  candidate_kinds:
+  - event
+  - evergreen_idea
+  epistemic_statuses:
+  - empirical
+  - formal_model
+  - testable_hypothesis
+  - philosophy
+  - futurism
+  - fiction
+  source_ids:
+  - openalex
+  - semantic_scholar
+  - crossref
+  - arxiv
+  - pubmed
+  - pmc
+  - lesswrong_curated
+  - alignment_forum
+  - astral_codex_ten
+  - manifold
+  max_candidates: 5
+  event_lookback_days: 14
+  min_epistemic_score: 20
+  instructions: 'Ищи не только свежие события, но и старые живые идеи, которые способны
+    существенно перестроить картину мира: сознание, цифровую личность, эмуляцию мозга,
+    долгожительство, космологию, основания физики, теорию решений и долгосрочное будущее
+    цивилизации. Строго разделяй датированное событие и evergreen-идею. Всегда присваивай
+    эпистемический статус, отделяй первоисточник от форумного триггера, называй сильное
+    возражение и не превращай красивую метафору, формальную модель или fiction в факт.'
+sources:
+- id: openalex
+  title: OpenAlex Works API
+  kind: api
+  role: research_index
+  evidence_role: discovery_only
+  endpoint: https://api.openalex.org/works
+  auth: free_key
+  request_cap_per_run: 2
+  topics:
+  - multidisciplinary_research
+  - citations
+  - institutions
+  notes: Бесплатный ключ; используем для обнаружения работ и связей, а не как замену
+    прочитанному первоисточнику.
+  enabled: false
+- id: semantic_scholar
+  title: Semantic Scholar Academic Graph
+  kind: api
+  role: research_index
+  evidence_role: discovery_only
+  endpoint: https://api.semanticscholar.org/graph/v1/paper/search
+  auth: optional_free_key
+  request_cap_per_run: 2
+  topics:
+  - multidisciplinary_research
+  - citations
+  - open_access
+  notes: Метаданные, цитирования и ссылки на open-access PDF помогают найти корпус,
+    но не подтверждают вывод без чтения самой работы.
+  enabled: false
+- id: crossref
+  title: Crossref REST API
+  kind: api
+  role: research_index
+  evidence_role: discovery_only
+  endpoint: https://api.crossref.org/works
+  auth: none
+  request_cap_per_run: 1
+  topics:
+  - doi_metadata
+  - scholarly_works
+  notes: Бесплатный индекс DOI и публикационных метаданных; служит для нормализации
+    и дедупликации, а не для доказательства научного утверждения.
+  enabled: false
+- id: arxiv
+  title: arXiv Export API
+  kind: api
+  role: primary_repository
+  evidence_role: primary
+  endpoint: https://export.arxiv.org/api/query
+  auth: none
+  request_cap_per_run: 2
+  topics:
+  - physics
+  - mathematics
+  - computer_science
+  - quantitative_biology
+  notes: Даёт первичные препринты; наличие на arXiv не означает peer review, поэтому
+    статус и качество доказательств оцениваются отдельно.
+  enabled: false
+- id: pubmed
+  title: PubMed E-utilities
+  kind: api
+  role: research_index
+  evidence_role: discovery_only
+  endpoint: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi
+  auth: optional_free_key
+  request_cap_per_run: 2
+  topics:
+  - neuroscience
+  - consciousness
+  - longevity
+  - bioethics
+  notes: Бесплатный поиск биомедицинских записей; ключ нужен только для повышенного
+    лимита, а полное доказательство ищем в статье или открытом репозитории.
+  enabled: false
+- id: pmc
+  title: PubMed Central E-utilities
+  kind: api
+  role: primary_repository
+  evidence_role: primary
+  endpoint: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi
+  auth: optional_free_key
+  request_cap_per_run: 2
+  topics:
+  - neuroscience
+  - consciousness
+  - longevity
+  - bioethics
+  notes: Открытые полнотекстовые статьи PMC можно использовать как первичный материал
+    с соблюдением лицензии конкретной публикации.
+  enabled: false
+- id: lesswrong_curated
+  title: LessWrong Curated RSS
+  kind: rss
+  role: idea_trigger
+  evidence_role: trigger_only
+  endpoint: https://www.lesswrong.com/feed.xml?view=curated
+  auth: none
+  request_cap_per_run: 1
+  topics:
+  - rationality
+  - ai_alignment
+  - decision_theory
+  - longtermism
+  notes: 'Качественный форумный радар: пост создаёт исследовательский вопрос, но не
+    считается подтверждением научного утверждения.'
+  enabled: false
+- id: alignment_forum
+  title: Alignment Forum RSS
+  kind: rss
+  role: idea_trigger
+  evidence_role: trigger_only
+  endpoint: https://www.alignmentforum.org/feed.xml?view=frontpage
+  auth: none
+  request_cap_per_run: 1
+  topics:
+  - ai_alignment
+  - decision_theory
+  - model_welfare
+  notes: Сигналы исследовательского сообщества об alignment и теории решений; любые
+    claims требуют перехода к работам и независимой критике.
+  enabled: false
+- id: astral_codex_ten
+  title: Astral Codex Ten RSS
+  kind: rss
+  role: idea_trigger
+  evidence_role: trigger_only
+  endpoint: https://www.astralcodexten.com/feed
+  auth: none
+  request_cap_per_run: 1
+  topics:
+  - science
+  - forecasting
+  - medicine
+  - culture
+  notes: Используется для поиска необычных вопросов и дискуссий, но авторский текст
+    не подменяет первичную научную литературу.
+  enabled: false
+- id: manifold
+  title: Manifold Markets API
+  kind: api
+  role: forecast_trigger
+  evidence_role: trigger_only
+  endpoint: https://api.manifold.markets/v0/markets
+  auth: none
+  request_cap_per_run: 1
+  topics:
+  - forecasting
+  - agi
+  - longevity
+  - future_technology
+  notes: Рынки показывают, какие странные вопросы стали измеримыми ожиданиями сообщества;
+    цены не являются научным доказательством или объективной вероятностью.
+  enabled: false

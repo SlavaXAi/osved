@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="referrer" content="no-referrer" />
+    <title>OSVED — персональная осведомлённость</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%23141920'/%3E%3Ctext x='11' y='29' font-family='Georgia' font-size='29' fill='%23d8e9e2'%3EP%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+  </head>
+  <body>
+    <section id="auth-screen" class="auth-screen" hidden>
+      <form id="auth-form" class="auth-card">
+        <div class="wordmark">OSVED<span class="brand-dot"></span></div>
+        <p class="eyebrow">ЛИЧНОЕ ПРОСТРАНСТВО</p>
+        <h1>Твоя картина мира.</h1>
+        <p>
+          Локальный интерфейс к сохранённым материалам. Введи ключ доступа,
+          указанный при запуске.
+        </p>
+        <label for="access-token">Ключ доступа</label>
+        <input
+          id="access-token"
+          name="token"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          required
+        />
+        <button type="submit" class="primary-button">
+          Открыть OSVED <span aria-hidden="true">→</span>
+        </button>
+        <p id="auth-error" class="error-text" role="alert"></p>
+        <small>Ключ остаётся в этом браузере только на время входа.</small>
+      </form>
+    </section>
+
+    <div id="app" class="app" hidden>
+      <aside class="sidebar" id="sidebar" aria-label="Навигация">
+        <a class="wordmark" href="/" aria-label="OSVED — главная"
+          >OSVED<span class="brand-dot"></span
+        ></a>
+        <div class="sidebar-caption">Персональная осведомлённость</div>
+        <div class="nav-heading">ТВОИ ИНТЕРЕСЫ</div>
+        <nav id="folder-nav" aria-label="Папки интересов"></nav>
+        <div class="sidebar-divider"></div>
+        <button id="saved-folder" class="folder-button" data-folder="saved">
+          <span data-icon="bookmark"></span
+          ><span class="folder-label">Сохранённое</span>
+        </button>
+        <button id="open-channels" class="folder-button">
+          <span data-icon="video"></span
+          ><span class="folder-label">YouTube-каналы</span
+          ><span class="nav-plus">+</span>
+        </button>
+        <div class="sidebar-bottom">
+          <span class="local-badge"><span></span>ЛОКАЛЬНО</span>
+          <p>Без чужой ленты.<br />В своём направлении.</p>
+          <span id="snapshot-label">Сохранённая база</span>
+          <span id="budget-status" class="budget-status" hidden></span>
+        </div>
+      </aside>
+      <button
+        id="nav-scrim"
+        class="nav-scrim"
+        aria-label="Закрыть меню"
+        hidden
+      ></button>
+
+      <div class="workspace">
+        <header class="topbar">
+          <button
+            id="mobile-menu"
+            class="icon-button mobile-menu"
+            aria-label="Открыть папки"
+          >
+            <span data-icon="menu"></span>
+          </button>
+          <div class="breadcrumb">
+            ТВОЯ ЛЕНТА <span>/</span>
+            <span id="breadcrumb-folder">Все материалы</span>
+          </div>
+          <div class="topbar-right">
+            <span id="local-time" class="local-time"></span
+            ><span class="profile-avatar" aria-label="Личное пространство"
+              >P</span
+            >
+          </div>
+        </header>
+
+        <div id="reading-layout" class="reading-layout">
+          <main id="main-content" class="main-content">
+            <div class="section-heading">
+              <div>
+                <p id="section-eyebrow" class="eyebrow">СОБРАНО ДЛЯ ТЕБЯ</p>
+                <h1 id="folder-title">Все материалы</h1>
+                <p id="folder-description" class="section-description">
+                  События и идеи из твоих источников.
+                </p>
+              </div>
+              <button
+                id="refresh-feed"
+                class="icon-button refresh-button"
+                aria-label="Обновить ленту"
+                title="Обновить сохранённую ленту"
+              >
+                <span data-icon="refresh"></span>
+              </button>
+            </div>
+
+            <div class="feed-controls">
+              <div
+                class="view-tabs"
+                role="tablist"
+                aria-label="Содержимое папки"
+              >
+                <button
+                  id="feed-tab"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="feed-panel"
+                  data-view="feed"
+                >
+                  Материалы <span id="feed-count"></span></button
+                ><button
+                  id="sources-tab"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="sources-panel"
+                  data-view="sources"
+                  tabindex="-1"
+                >
+                  Источники
+                </button>
+              </div>
+              <label class="search-field"
+                ><span data-icon="search"></span
+                ><input
+                  id="feed-search"
+                  type="search"
+                  placeholder="Найти в папке"
+                  aria-label="Поиск в выбранной папке"
+                  autocomplete="off"
+              /></label>
+            </div>
+            <div id="region-filter" class="region-filter" hidden>
+              <span data-icon="pin"></span><span id="region-filter-label"></span
+              ><button id="clear-region" aria-label="Сбросить регион">
+                <span data-icon="close"></span>
+              </button>
+            </div>
+            <div
+              id="connection-notice"
+              class="connection-notice"
+              hidden
+              role="status"
+            ></div>
+
+            <section id="feed-panel" role="tabpanel" aria-labelledby="feed-tab">
+              <div
+                id="feed"
+                class="feed"
+                aria-live="polite"
+                aria-busy="true"
+              ></div>
+              <div id="feed-pagination" class="feed-pagination">
+                <button id="load-more" class="secondary-button" hidden>
+                  Ещё материалы <span aria-hidden="true">↓</span>
+                </button>
+                <p id="feed-end"></p>
+              </div>
+            </section>
+            <section
+              id="sources-panel"
+              role="tabpanel"
+              aria-labelledby="sources-tab"
+              hidden
+            >
+              <div class="sources-intro">
+                <h2>Откуда берётся эта лента</h2>
+                <p>
+                  Каналы и сайты дают сигналы для радара. Ссылки на факты и
+                  первоисточники находятся внутри самих публикаций.
+                </p>
+              </div>
+              <div id="sources-list" class="sources-list"></div>
+            </section>
+          </main>
+
+          <aside
+            id="world-panel"
+            class="world-panel"
+            aria-label="География интересов"
+            hidden
+          >
+            <div class="world-sticky">
+              <div class="world-heading">
+                <span>КАРТИНА МИРА</span><span data-icon="compass"></span>
+              </div>
+              <div
+                id="globe-widget"
+                class="globe-widget"
+                aria-label="Интерактивная планета"
+              ></div>
+              <div class="world-caption">
+                <span class="tiny-dot"></span>Выбери точку интереса
+              </div>
+              <div id="region-buttons" class="region-buttons">
+                <button data-region="moscow" aria-pressed="false">
+                  <span>Москва</span><span>RU</span>
+                </button>
+                <button data-region="beijing" aria-pressed="false">
+                  <span>Пекин</span><span>CN</span>
+                </button>
+                <button data-region="gba" aria-pressed="false">
+                  <span>Greater Bay Area</span><span>CN</span>
+                </button>
+                <button data-region="rostov" aria-pressed="false">
+                  <span>Ростов-на-Дону</span><span>RU</span>
+                </button>
+                <button data-region="tehran" aria-pressed="false">
+                  <span>Тегеран</span><span>IR</span>
+                </button>
+              </div>
+              <p class="world-note">
+                Поиск по упоминаниям региона в материалах. Контуры Natural Earth
+                — не карта военного контроля.
+              </p>
+              <div class="quiet-divider"></div>
+              <div class="world-footnote">
+                <span>В ФОКУСЕ</span>
+                <p>Не всё происходящее.<br />То, что помогает понимать.</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <dialog
+      id="channels-dialog"
+      class="channels-dialog"
+      aria-labelledby="channels-title"
+    >
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">ТВОЙ YOUTUBE-РАДАР</p>
+          <h2 id="channels-title">Следить за каналами</h2>
+        </div>
+        <button
+          id="close-channels"
+          class="icon-button"
+          aria-label="Закрыть каналы"
+        >
+          <span data-icon="close"></span>
+        </button>
+      </div>
+      <p class="dialog-description">
+        Добавь ссылку на канал. Изменения сохраняются в локальной копии и не
+        меняют настройки бота на сервере.
+      </p>
+      <form id="channel-form">
+        <label for="channel-url">Ссылка на YouTube-канал</label>
+        <div class="channel-input-row">
+          <input
+            id="channel-url"
+            type="url"
+            placeholder="https://youtube.com/@channel"
+            required
+            autocomplete="off"
+          /><button class="primary-button" type="submit">Добавить</button>
+        </div>
+        <p id="channel-form-error" class="error-text" role="alert"></p>
+      </form>
+      <div id="channels-list" class="channels-list"></div>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <noscript
+      ><p class="noscript">Для интерфейса OSVED нужен JavaScript.</p></noscript
+    >
+    <script type="module" src="/static/dashboard.js"></script>
+    <script type="module" src="/static/globe.js"></script>
+  </body>
+</html>

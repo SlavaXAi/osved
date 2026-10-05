@@ -1,0 +1,16 @@
+version: 1
+vertical: personal_awareness
+production_max_age_days: 5
+calibration_lookback_days: 21
+topics:
+- technology
+regions_of_interest:
+- global
+goals:
+- Отбирать существенные события по моим источникам и выбранным темам.
+positive_patterns:
+- Проверяемые события, понятный контекст и последствия.
+avoid_patterns:
+- Реклама, повтор одного события, неподтверждённые заявления.
+current_projects: []
+exploration_fraction: 0.15

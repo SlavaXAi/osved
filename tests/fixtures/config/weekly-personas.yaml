@@ -1,0 +1,169 @@
+version: 2
+personas:
+- id: liberman_brothers
+  name: Братья Либерманы
+  role: Предприниматели; вычислительная инфраструктура и экономика AI
+  topics:
+  - ai_infrastructure
+  - technology_economy
+  - startups
+  - technology_strategy
+  source_strategy:
+    x_handles: []
+    include_interviews: true
+    official_transcript_sources: []
+  skip_if_no_material_update: true
+- id: elon_musk
+  name: Elon Musk
+  role: Tesla, SpaceX and xAI CEO
+  topics:
+  - ai
+  - robotics
+  - space
+  - manufacturing
+  - geopolitics
+  source_strategy:
+    x_handles:
+    - elonmusk
+    include_interviews: true
+    official_transcript_sources:
+    - https://www.tesla.com/blog
+    - https://x.ai/news
+    - https://www.spacex.com/updates/
+  skip_if_no_material_update: true
+- id: sam_altman
+  name: Sam Altman
+  role: OpenAI CEO
+  topics:
+  - frontier_ai
+  - agents
+  - ai_infrastructure
+  - technology_economy
+  source_strategy:
+    x_handles:
+    - sama
+    include_interviews: true
+    official_transcript_sources:
+    - https://openai.com/news/
+  skip_if_no_material_update: true
+- id: jensen_huang
+  name: Jensen Huang
+  role: NVIDIA founder and CEO
+  topics:
+  - semiconductors
+  - ai_infrastructure
+  - robotics
+  - manufacturing
+  source_strategy:
+    x_handles:
+    - JensenHuang
+    include_interviews: true
+    official_transcript_sources:
+    - https://www.nvidia.com/en-us/events/
+    - https://blogs.nvidia.com/
+  skip_if_no_material_update: true
+- id: peter_thiel
+  name: Peter Thiel
+  role: Investor and technology strategist
+  topics:
+  - venture_capital
+  - technology_strategy
+  - geopolitics
+  - defense_technology
+  source_strategy:
+    x_handles: []
+    include_interviews: true
+    official_transcript_sources: []
+  skip_if_no_material_update: true
+- id: vladimir_putin
+  name: Vladimir Putin
+  role: President of Russia
+  topics:
+  - russia
+  - geopolitics
+  - industrial_policy
+  - technology_policy
+  - defense_technology
+  source_strategy:
+    x_handles: []
+    include_interviews: true
+    official_transcript_sources:
+    - http://en.kremlin.ru/events/president/transcripts
+    - http://kremlin.ru/events/president/transcripts
+  skip_if_no_material_update: true
+- id: xi_jinping
+  name: Xi Jinping
+  role: President of China
+  topics:
+  - china
+  - geopolitics
+  - industrial_policy
+  - technology_policy
+  - manufacturing
+  source_strategy:
+    x_handles: []
+    include_interviews: false
+    official_transcript_sources:
+    - https://english.www.gov.cn/news/topnews/
+    - https://www.fmprc.gov.cn/eng/xw/zyxw/
+  skip_if_no_material_update: true
+- id: demis_hassabis
+  name: Demis Hassabis
+  role: Google DeepMind co-founder and CEO
+  topics:
+  - frontier_ai
+  - ai_for_science
+  - robotics
+  - agi
+  source_strategy:
+    x_handles:
+    - demishassabis
+    include_interviews: true
+    official_transcript_sources:
+    - https://deepmind.google/discover/blog/
+  skip_if_no_material_update: true
+- id: dario_amodei
+  name: Dario Amodei
+  role: Anthropic co-founder and CEO
+  topics:
+  - frontier_ai
+  - ai_safety
+  - agents
+  - ai_economics
+  source_strategy:
+    x_handles:
+    - DarioAmodei
+    include_interviews: true
+    official_transcript_sources:
+    - https://www.anthropic.com/news
+  skip_if_no_material_update: true
+- id: mark_zuckerberg
+  name: Mark Zuckerberg
+  role: Meta founder and CEO
+  topics:
+  - open_source_ai
+  - ai_infrastructure
+  - spatial_computing
+  - platforms
+  source_strategy:
+    x_handles:
+    - finkd
+    include_interviews: true
+    official_transcript_sources:
+    - https://about.fb.com/news/
+  skip_if_no_material_update: true
+- id: satya_nadella
+  name: Satya Nadella
+  role: Microsoft chairman and CEO
+  topics:
+  - enterprise_ai
+  - agents
+  - cloud
+  - ai_economics
+  source_strategy:
+    x_handles:
+    - satyanadella
+    include_interviews: true
+    official_transcript_sources:
+    - https://news.microsoft.com/source/
+  skip_if_no_material_update: true

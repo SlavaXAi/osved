@@ -1,0 +1,19 @@
+version: 1
+sources:
+- id: x_search_custom
+  name: X — моя тема
+  kind: x
+  locator: '"AI agents" (release OR launch OR benchmark) -filter:retweets'
+  adapter_id: x_search_monid
+  strategy: search
+  admission_mode: trigger_only
+  role: radar
+  region: global
+  language: en
+  topics:
+  - ai
+  - technology
+  poll_interval_minutes: 720
+  daily_call_cap: 2
+  daily_candidate_cap: 6
+  monthly_cost_cap_usd: 0.15

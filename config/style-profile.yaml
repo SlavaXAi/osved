@@ -1,0 +1,16 @@
+version: neutral_v1
+defaults:
+  format: brief
+  target_visible_characters:
+  - 700
+  - 1600
+  paragraph_count:
+  - 3
+  - 6
+principles:
+- Начинать с конкретного события.
+- Объяснять последствия простым языком.
+- Отделять факты от авторской интерпретации.
+forbidden:
+- Выдумывать факты или личный опыт владельца.
+allowed_theses: {}

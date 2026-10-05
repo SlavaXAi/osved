@@ -1,0 +1,10 @@
+version: 1
+authors:
+- handle: karpathy
+  name: Andrej Karpathy (example)
+  topics:
+  - ai
+  - technology
+  initial_tier: active
+  enabled: true
+  weekly_persona: false

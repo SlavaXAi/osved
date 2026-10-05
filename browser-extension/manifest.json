@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "OSVED — локальный радар X",
+  "version": "0.1.0",
+  "description": "Передаёт видимые публикации открытой вкладки For You в ваш локальный OSVED.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8769/*", "https://x.com/*"],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{"matches": ["https://x.com/*"], "js": ["content.js"], "run_at": "document_idle"}],
+  "action": {"default_title": "OSVED: состояние радара", "default_popup": "options.html"},
+  "options_ui": {"page": "options.html", "open_in_tab": true},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
+}

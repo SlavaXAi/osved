@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OSVED · Радар X</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">OSVED · Орган чувств</p>
+    <h1>Видимая лента X</h1>
+    <p>Радар передаёт текст постов из открытой вкладки «Для вас» вашему локальному OSVED. Он не листает ленту и не выполняет действий в аккаунте.</p>
+    <label>ID этого расширения <input id="extension-id" readonly></label>
+    <p class="hint">Укажите этот ID при запуске локального browser-bridge.</p>
+    <label>Код подключения <input id="token" type="password" autocomplete="off" placeholder="Из локального OSVED"></label>
+    <p class="hint">Код хранится только до перезапуска браузера. Cookie и пароль X вводить не нужно.</p>
+    <label class="toggle"><input id="enabled" type="checkbox"> Разрешить снимки видимой ленты</label>
+    <div class="actions"><button id="save">Подключить</button><button id="poll" class="secondary">Проверить сейчас</button></div>
+    <p id="status" role="status">Радар выключен.</p>
+    <ol>
+      <li>Запустите локальный OSVED и подключите расширение.</li>
+      <li>Войдите в X вручную и откройте вкладку «Для вас».</li>
+      <li>Оставьте эту вкладку активной. Снимок выполняется только при наличии задачи.</li>
+    </ol>
+    <p class="hint">Адрес сервиса: http://127.0.0.1:8769 · Эксперимент, только Chromium.</p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

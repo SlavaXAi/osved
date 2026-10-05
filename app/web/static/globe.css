@@ -1,0 +1,14 @@
+#globe-widget{position:relative;isolation:isolate;overflow:hidden;background:radial-gradient(ellipse at center,#10232666,transparent 68%)}
+#globe-widget .pars-globe-canvas{position:absolute;inset:0 0 22px}
+#globe-widget .cesium-viewer,#globe-widget .cesium-viewer-cesiumWidgetContainer,#globe-widget .cesium-widget,#globe-widget canvas{width:100%;height:100%;touch-action:pan-y}
+#globe-widget .cesium-viewer-bottom{display:none}
+#globe-widget .pars-globe-credit{position:absolute;bottom:0;left:0;right:0;font:8px sans-serif;color:#748d89;text-align:center;opacity:.7}
+#globe-widget .pars-globe-credit a{color:inherit}
+#globe-widget .cesium-credit-logoContainer img{height:10px}
+#globe-widget .pars-globe-credit .cesium-credit-textContainer{display:inline}
+#globe-widget .pars-globe-controls{position:absolute;right:2px;bottom:24px;display:flex;gap:3px}
+#globe-widget .pars-globe-controls button{background:#101b20cc;border:1px solid #7cac9c28;border-radius:5px;color:#9fb8b0;font:13px sans-serif;width:28px;height:28px;cursor:pointer}
+#globe-widget .pars-globe-controls button:hover{color:#e2efe9;background:#1b3037}
+#globe-widget .pars-globe-controls button:focus-visible{outline:2px solid #83bcb0;outline-offset:2px}
+#globe-widget .pars-globe-loading{position:absolute;left:12px;right:12px;top:44%;color:#8ea8a3;font:11px/1.5 sans-serif;text-align:center;background:#0b121ccc;padding:8px}
+#globe-widget .pars-globe-loading[hidden]{display:none}

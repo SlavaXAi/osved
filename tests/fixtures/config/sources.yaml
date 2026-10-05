@@ -1,0 +1,528 @@
+version: 1
+sources:
+- id: telegram_test_history
+  name: Test history
+  kind: telegram
+  locator: test_history
+  role: own_history
+  enabled: true
+  candidate_enabled: false
+  priority: p0
+  region: russia
+  language: ru
+  topics:
+  - technology
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 0
+- id: telegram_ict_moscow_ai
+  name: ICT Moscow AI
+  kind: telegram
+  locator: ict_moscow_ai
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: russia
+  language: ru
+  topics:
+  - ai
+  - technology
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: telegram_blockchain_rf
+  name: BlockchainRF
+  kind: telegram
+  locator: blockchainRF
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: russia
+  language: ru
+  topics:
+  - blockchain
+  - crypto_economy
+  - infrastructure
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: telegram_overbafer1
+  name: Overbafer
+  kind: telegram
+  locator: overbafer1
+  role: author_radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: ru
+  topics:
+  - ai
+  - technology
+  - business
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: telegram_crypto_essay
+  name: Crypto Essay
+  kind: telegram
+  locator: cryptoEssay
+  role: author_radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: ru
+  topics:
+  - crypto_economy
+  - blockchain
+  - technology
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: telegram_prompt_design
+  name: Prompt Design
+  kind: telegram
+  locator: prompt_design
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: ru
+  topics:
+  - ai
+  - agents
+  - tools
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: telegram_ai_newz
+  name: AI Newz
+  kind: telegram
+  locator: ai_newz
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: ru
+  topics:
+  - ai
+  - technology
+  poll_interval_minutes: 15
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 20
+- id: rss_openai_news
+  name: OpenAI News
+  kind: rss
+  locator: https://openai.com/news/rss.xml
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: united_states
+  language: en
+  topics:
+  - ai
+  - agents
+  - research
+  - technology_economy
+  poll_interval_minutes: 60
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 12
+- id: rss_deepmind_news
+  name: Google DeepMind News
+  kind: rss
+  locator: https://deepmind.google/blog/rss.xml
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: en
+  topics:
+  - ai
+  - agents
+  - robotics
+  - research
+  poll_interval_minutes: 60
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 10
+- id: rss_nvidia_blog
+  name: NVIDIA Blog
+  kind: rss
+  locator: https://blogs.nvidia.com/feed/
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: united_states
+  language: en
+  topics:
+  - ai
+  - robotics
+  - semiconductors
+  - compute_infrastructure
+  include_keywords:
+  - AI
+  - agent
+  - robot
+  - GPU
+  - chip
+  - semiconductor
+  - compute
+  - inference
+  - model
+  - data center
+  - AI factory
+  exclude_keywords:
+  - GeForce NOW
+  - gaming
+  - game release
+  - best CEOs
+  - NVIDIA Life
+  poll_interval_minutes: 60
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 10
+- id: rss_securelist
+  name: Kaspersky Securelist
+  kind: rss
+  locator: https://securelist.com/feed/
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p2
+  region: russia
+  language: en
+  topics:
+  - cybersecurity
+  - technology
+  poll_interval_minutes: 120
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 2
+- id: github_qwen_code
+  name: Qwen Code Releases
+  kind: github
+  locator: QwenLM/qwen-code
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: china
+  language: en
+  topics:
+  - ai
+  - agents
+  - open_source
+  exclude_keywords:
+  - Pre-release
+  - non-production
+  - screenshot
+  - quarantined
+  poll_interval_minutes: 120
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 5
+- id: github_tensorrt_llm
+  name: NVIDIA TensorRT-LLM Releases
+  kind: github
+  locator: NVIDIA/TensorRT-LLM
+  role: primary
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: united_states
+  language: en
+  topics:
+  - ai
+  - semiconductors
+  - compute_infrastructure
+  - open_source
+  exclude_keywords:
+  - Pre-release
+  poll_interval_minutes: 120
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 5
+- id: web_agent_frontier_global
+  name: Search Agent — Global Frontier
+  kind: web
+  locator: openrouter:web_search/frontier_global_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - ai
+  - agents
+  - semiconductors
+  - compute_infrastructure
+  - technology_economy
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 8
+- id: web_agent_china_asia_industry
+  name: Search Agent — China and Asia Industry
+  kind: web
+  locator: openrouter:web_search/china_asia_industry_v3
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: china
+  language: multilingual
+  topics:
+  - ai
+  - robotics
+  - semiconductors
+  - manufacturing
+  - energy
+  - transportation
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 8
+- id: web_agent_russia_cis_dual_use
+  name: Search Agent — Russia CIS and Dual Use
+  kind: web
+  locator: openrouter:web_search/russia_cis_dual_use_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: russia
+  language: multilingual
+  topics:
+  - ai
+  - robotics
+  - manufacturing
+  - cybersecurity
+  - defense_technology
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 8
+- id: web_agent_personal_rare_signals
+  name: Search Agent — Personal Rare Signals
+  kind: web
+  locator: openrouter:web_search/personal_rare_signals_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - agents
+  - fintech
+  - voice
+  - construction
+  - industrial_ai
+  - open_source
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 5
+  daily_candidate_cap: 8
+- id: web_agent_startup_capital
+  name: Search Agent — Startups and Capital
+  kind: web
+  locator: openrouter:web_search/startup_capital_v2
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - startups
+  - venture_capital
+  - business_models
+  - yc
+  - a16z
+  - company_economics
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 7
+  daily_candidate_cap: 8
+- id: web_agent_world_strategy
+  name: Search Agent — World Economy and Strategy
+  kind: web
+  locator: openrouter:web_search/world_strategy_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - world_economy
+  - geopolitics
+  - industrial_policy
+  - trade
+  - energy
+  - capital
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 7
+  daily_candidate_cap: 8
+- id: web_agent_frontier_ideas
+  name: Search Agent — Frontier Ideas
+  kind: web
+  locator: openrouter:web_search/frontier_ideas_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: global
+  language: multilingual
+  topics:
+  - consciousness
+  - longevity
+  - future_studies
+  - computation
+  - ai_welfare
+  - civilization
+  poll_interval_minutes: 1440
+  calibration_lookback_days: 30
+  production_max_age_days: 14
+  daily_candidate_cap: 6
+- id: web_agent_physical_economy
+  name: Search Agent — Physical Economy
+  kind: web
+  locator: openrouter:web_search/physical_economy_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - robotics
+  - space
+  - logistics
+  - construction
+  - infrastructure
+  - energy
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 10
+  daily_candidate_cap: 8
+- id: web_agent_company_capital
+  name: Search Agent — Company Economics and Capital
+  kind: web
+  locator: openrouter:web_search/company_capital_v2
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - company_economics
+  - labor
+  - unit_economics
+  - capital_allocation
+  - fintech
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 7
+  daily_candidate_cap: 8
+- id: web_agent_world_economy
+  name: Search Agent — World Economy
+  kind: web
+  locator: openrouter:web_search/world_economy_v2
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - macroeconomics
+  - trade
+  - currencies
+  - rates
+  - commodities
+  - industrial_policy
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 7
+  daily_candidate_cap: 8
+- id: web_agent_geopolitics
+  name: Search Agent — Geopolitics and State Strategy
+  kind: web
+  locator: openrouter:web_search/geopolitics_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - geopolitics
+  - defense_technology
+  - sanctions
+  - sovereignty
+  - alliances
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 7
+  daily_candidate_cap: 8
+- id: web_agent_people_institutions
+  name: Search Agent — People and Institutions
+  kind: web
+  locator: openrouter:web_search/people_institutions_v1
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p0
+  region: global
+  language: multilingual
+  topics:
+  - leadership
+  - institutions
+  - universities
+  - funds
+  - technology_strategy
+  poll_interval_minutes: 720
+  calibration_lookback_days: 21
+  production_max_age_days: 10
+  daily_candidate_cap: 8
+- id: web_agent_human_civilization
+  name: Search Agent — Human and Civilization
+  kind: web
+  locator: openrouter:web_search/human_civilization_v2
+  role: radar
+  enabled: true
+  candidate_enabled: true
+  priority: p1
+  region: global
+  language: multilingual
+  topics:
+  - attention
+  - education
+  - culture
+  - language
+  - civilization
+  - ai_society
+  poll_interval_minutes: 1440
+  calibration_lookback_days: 30
+  production_max_age_days: 14
+  daily_candidate_cap: 8
