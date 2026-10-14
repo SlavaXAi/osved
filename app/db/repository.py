@@ -49,6 +49,17 @@ DETAIL_TERMINAL_FAILURE_STATUSES = {
 }
 
 
+def _all_detail_policy_sql(alias="detailed_articles"):
+    return (
+        "("
+        + " OR ".join(
+            f"({alias}.depth = '{depth}' AND {current_detail_policy_sql(alias, depth=depth)})"
+            for depth in ("legacy", "expanded", "article")
+        )
+        + ")"
+    )
+
+
 def _as_utc_datetime(value: str | None = None) -> datetime:
     if value is None:
         return datetime.now(UTC)
@@ -62,6 +73,7 @@ def _detail_request_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["request_id"] = int(result["id"])
     result["cache_hit"] = bool(result.get("cache_hit"))
+    result["reader_context"] = json.loads(result.get("reader_context_json") or "{}")
     return result
 
 
@@ -74,6 +86,7 @@ def _detailed_article_row(row: sqlite3.Row) -> dict[str, Any]:
         ("structured_output_json", "structured_output"),
         ("source_urls_json", "source_urls"),
         ("validation_errors_json", "validation_errors"),
+        ("reader_context_json", "reader_context"),
     ):
         result[target] = json.loads(result.pop(source))
     return result
@@ -2686,6 +2699,8 @@ class Repository:
         generation_key: str | None = None,
         max_daily_new: int = 5,
         now: str | None = None,
+        depth: str = "legacy",
+        reader_context: dict | None = None,
     ) -> dict[str, Any]:
         """Atomically enqueue one paid on-demand research request per delivery.
 
@@ -2693,6 +2708,19 @@ class Repository:
         the existing request. A valid, unexpired article is attached immediately
         without consuming the daily allowance.
         """
+        if depth != "legacy":
+            from app.db.news_reader import enqueue
+
+            return enqueue(
+                self,
+                delivery_id,
+                requested_by_user_id,
+                depth=depth,
+                reader_context=reader_context,
+                generation_key=generation_key,
+                max_daily_new=max_daily_new,
+                now=now,
+            )
         if max_daily_new < 0:
             raise ValueError("max_daily_new must be non-negative")
         requested_at = _as_utc_datetime(now)
@@ -2728,7 +2756,7 @@ class Repository:
                 f"event:{int(context['event_id'])}:{DETAIL_PROMPT_VERSION}"
             )
             existing = connection.execute(
-                "SELECT * FROM detail_requests WHERE delivery_id = ?",
+                "SELECT * FROM detail_requests WHERE delivery_id = ? AND depth='legacy'",
                 (delivery_id,),
             ).fetchone()
             if existing is not None:
@@ -2878,10 +2906,13 @@ class Repository:
         result.update({"created": True, "cache_hit": False})
         return result
 
-    def detail_request_for_delivery(self, delivery_id: int) -> dict[str, Any] | None:
+    def detail_request_for_delivery(
+        self, delivery_id: int, *, depth: str = "legacy"
+    ) -> dict[str, Any] | None:
         with self.connection() as connection:
             row = connection.execute(
-                "SELECT * FROM detail_requests WHERE delivery_id = ?", (delivery_id,)
+                "SELECT * FROM detail_requests WHERE delivery_id = ? AND depth = ?",
+                (delivery_id, depth),
             ).fetchone()
         if row is None:
             return None
@@ -3207,7 +3238,21 @@ class Repository:
         generation_key: str,
         *,
         now: str | None = None,
+        depth: str = "legacy",
+        context_fingerprint: str | None = None,
+        reader_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        if depth != "legacy":
+            from app.db.news_reader import cached_article
+
+            return cached_article(
+                self,
+                depth=depth,
+                generation_key=generation_key,
+                context_fingerprint=context_fingerprint,
+                reader_context=reader_context,
+                now=now,
+            )
         checked_at = _as_utc_datetime(now).isoformat()
         with self.connection() as connection:
             row = connection.execute(
@@ -3215,7 +3260,7 @@ class Repository:
                 SELECT *
                 FROM detailed_articles
                 WHERE generation_key = ?
-                  AND validation_status = 'valid'
+                  AND validation_status = 'valid' AND depth = 'legacy'
                   AND {current_detail_policy_sql()}
                   AND datetime(expires_at) > datetime(?)
                 LIMIT 1
@@ -3229,7 +3274,21 @@ class Repository:
         event_id: int,
         *,
         now: str | None = None,
+        depth: str = "legacy",
+        context_fingerprint: str | None = None,
+        reader_context: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        if depth != "legacy":
+            from app.db.news_reader import cached_article
+
+            return cached_article(
+                self,
+                depth=depth,
+                event_id=event_id,
+                context_fingerprint=context_fingerprint,
+                reader_context=reader_context,
+                now=now,
+            )
         checked_at = _as_utc_datetime(now).isoformat()
         with self.connection() as connection:
             row = connection.execute(
@@ -3237,7 +3296,7 @@ class Repository:
                 SELECT *
                 FROM detailed_articles
                 WHERE event_id = ?
-                  AND validation_status = 'valid'
+                  AND validation_status = 'valid' AND depth = 'legacy'
                   AND {current_detail_policy_sql()}
                   AND datetime(expires_at) > datetime(?)
                 ORDER BY created_at DESC, id DESC
@@ -3273,8 +3332,36 @@ class Repository:
         generation_cost_usd: float,
         expires_at: str,
         now: str | None = None,
+        depth: str = "legacy",
+        reader_context: dict | None = None,
+        context_fingerprint: str | None = None,
     ) -> int:
         """Persist an immutable article and make the claimed request ready atomically."""
+        if depth != "legacy":
+            from app.db.news_reader import store
+
+            return store(
+                self,
+                request_id,
+                depth=depth,
+                reader_context=reader_context,
+                context_fingerprint=context_fingerprint,
+                generation_key=generation_key,
+                schema_version=schema_version,
+                prompt_version=prompt_version,
+                model=model,
+                provider_response_metadata=provider_response_metadata,
+                fact_snapshot=fact_snapshot,
+                document_ids=document_ids,
+                structured_output=structured_output,
+                rendered_html=rendered_html,
+                source_urls=source_urls,
+                validation_status=validation_status,
+                validation_errors=validation_errors,
+                generation_cost_usd=generation_cost_usd,
+                expires_at=expires_at,
+                now=now,
+            )
         if generation_cost_usd < 0:
             raise ValueError("generation_cost_usd must be non-negative")
         if validation_status != "valid":
@@ -3368,6 +3455,11 @@ class Repository:
         now: str | None = None,
     ) -> bool:
         """Attach an already-built artifact without re-running paid providers."""
+        request = self.get_detail_request(request_id)
+        if request and request.get("depth", "legacy") != "legacy":
+            from app.db.news_reader import attach_cache
+
+            return attach_cache(self, request_id, article_id, now=now)
         completed_at = _as_utc_datetime(now).isoformat()
         with self.connection() as connection:
             cursor = connection.execute(
@@ -3421,7 +3513,7 @@ class Repository:
                 JOIN deliveries ON deliveries.id = requests.delivery_id
                 WHERE requests.status = 'ready'
                   AND articles.validation_status = 'valid'
-                  AND {current_detail_policy_sql("articles")}
+                  AND {_all_detail_policy_sql("articles")}
                   AND datetime(articles.expires_at)>datetime(?)
                 ORDER BY requests.completed_at, requests.id
                 LIMIT ?
@@ -3455,8 +3547,11 @@ class Repository:
                     updated_at=?
                 WHERE status='ready' AND NOT EXISTS (
                     SELECT 1 FROM detailed_articles WHERE id=detail_requests.article_id
+                      AND depth=detail_requests.depth
+                      AND (detail_requests.depth='legacy' OR context_fingerprint=
+                        json_extract(detail_requests.reader_context_json,'$.context_fingerprint'))
                       AND event_id=detail_requests.event_id AND validation_status='valid'
-                      AND {current_detail_policy_sql()}
+                      AND {_all_detail_policy_sql()}
                       AND datetime(expires_at)>datetime(?)
                 )""",
                 (claimed_at_iso, claimed_at_iso),
@@ -3469,6 +3564,9 @@ class Repository:
                     SELECT id
                     FROM detail_requests
                     WHERE status = 'ready'
+                      AND (depth='legacy' OR EXISTS(SELECT 1 FROM news_panels p
+                        WHERE p.delivery_id=detail_requests.delivery_id
+                        AND p.active_request_id=detail_requests.id AND p.view='loading'))
                       AND placeholder_message_id IS NOT NULL
                       AND (
                           lease_until IS NULL
@@ -3570,12 +3668,16 @@ class Repository:
                 SET status = 'queued', stage = 'queued', article_id = NULL,
                     lease_until = NULL, placeholder_lease_until = NULL,
                     last_error = NULL, started_at = NULL,
-                    completed_at = NULL, cache_hit = 0, updated_at = ?
+                    completed_at = NULL, cache_hit = 0,
+                    reader_context_json=CASE WHEN depth='legacy' THEN reader_context_json
+                        ELSE json_set(reader_context_json,'$.retry_authorization',?,
+                            '$.retry_rejected',json('true')) END,
+                    updated_at = ?
                 WHERE id = ?
                   AND status IN ('failed', 'insufficient_evidence', 'budget_blocked')
                 RETURNING *
                 """,
-                (retried_at, request_id),
+                (uuid.uuid4().hex, retried_at, request_id),
             )
             row = cursor.fetchone()
         if row is None:

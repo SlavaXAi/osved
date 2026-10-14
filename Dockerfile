@@ -14,7 +14,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Embedded Cyrillic fonts for the on-demand, plain-text video PDFs.
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-liberation2 \
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-liberation2 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # The research adapters intentionally use the Monid CLI as a single provider

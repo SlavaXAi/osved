@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from app.config import Settings, load_interest_profile, runtime_source_registry
 from app.db.repository import Repository
 from app.pipeline.editorial import extract_editorial_metadata, newsworthiness_features
+from app.video.shorts import ShortsClassifier, metadata_type
 
 LOW_VALUE_HOSTS = {
     "t.me",
@@ -119,6 +120,17 @@ def prepare_candidates(
 
     for item in rows:
         item_id = int(item["id"])
+        if item["source_kind"] == "youtube":
+            metadata = json.loads(item.get("media_metadata_json") or "{}")
+            video_id = metadata.get("video_id") or item.get("external_id") or ""
+            kind = metadata_type(metadata)
+            if kind is None:
+                kind = ShortsClassifier(repository).cached(video_id)
+            if kind is not False:
+                repository.mark_source_item_status(
+                    item_id, "filtered_short" if kind else "video_pending_type"
+                )
+                continue
         if not item["candidate_enabled"] or item["source_role"] == "own_history":
             repository.mark_source_item_status(item_id, "history_only")
             rejected += 1

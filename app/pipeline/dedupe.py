@@ -294,7 +294,9 @@ def deduplicate_events(
     threshold: float = 0.45,
     window_hours: int = 72,
 ) -> DedupeStats:
-    rows = repository.dedupe_event_rows()
+    # A concept explainer and an event report may cite the same post while
+    # serving different purposes. Concepts deduplicate by their own identity.
+    rows = [row for row in repository.dedupe_event_rows() if row["event_type"] != "concept_brief"]
     active = {int(row["id"]): row for row in rows}
     merged = 0
 

@@ -136,7 +136,7 @@ def insert_video(repository, *, chat_id=OWNER, recommendation=False):
         original_language="en",
         published_at=datetime.now(UTC).isoformat(),
         outbound_urls=[VIDEO_URL],
-        media_metadata={},
+        media_metadata={"is_short": False, "video_id": "abcdefghijk"},
         payload_hash="video-fixture",
         raw_payload={"video_id": "abcdefghijk"},
     )
@@ -309,7 +309,8 @@ def test_first_video_card_has_no_url_or_preview_and_is_not_sent_twice(environmen
     actions = [
         VideoControl.unpack(button.callback_data).action for button in buttons(sent["reply_markup"])
     ]
-    assert actions == ["interest", "dismiss"]
+    assert actions == ["open", "dismiss"]
+    assert buttons(sent["reply_markup"])[0].text == "Подробнее"
     assert (
         asyncio.run(
             send_video_recommendations(
@@ -324,6 +325,51 @@ def test_first_video_card_has_no_url_or_preview_and_is_not_sent_twice(environmen
     assert len(bot.sent) == 1
 
 
+def test_legacy_channel_preference_callbacks_explain_result_feedback_without_writes(environment):
+    from app.telegram_bot.sensory import video_keyboard
+    from app.video.preferences import preference
+
+    _, repository, router = environment
+    rec_id = insert_video(repository, recommendation=True)
+    callback = FakeCallback()
+    callback.message.reply_markup = video_keyboard(rec_id, expanded=True, url=VIDEO_URL)
+    for action in ("less", "less", "more"):
+        asyncio.run(
+            handler(router, "video_handler")(
+                callback, VideoControl(recommendation_id=rec_id, action=action)
+            )
+        )
+    assert preference(repository, OWNER, "source:youtube_test") == 0
+    assert [answer[0] for answer in callback.answers] == [
+        "Оцени полезность под сводкой или PDF"
+    ] * 3
+    actions = [
+        VideoControl.unpack(b.callback_data).action
+        for b in buttons(callback.message.reply_markup)
+        if b.callback_data
+    ]
+    assert actions == ["short", "long", "dismiss"]
+    with repository.connection() as db:
+        assert db.execute("SELECT count(*) FROM youtube_channel_preferences").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM video_feedback_events").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM video_pdf_jobs").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM usage_ledger").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("user_id,message_id", [(456, 701), (OWNER, 999)])
+def test_channel_preference_rejects_other_owner_or_message(environment, user_id, message_id):
+    _, repository, router = environment
+    rec_id = insert_video(repository, recommendation=True)
+    callback = FakeCallback(user_id=user_id, message_id=message_id)
+    asyncio.run(
+        handler(router, "video_handler")(
+            callback, VideoControl(recommendation_id=rec_id, action="less")
+        )
+    )
+    with repository.connection() as db:
+        assert db.execute("SELECT count(*) FROM youtube_channel_preferences").fetchone()[0] == 0
+
+
 def test_all_uploads_over_old_30_and_3_limits_then_new_upload_same_day(environment, monkeypatch):
     from unittest.mock import AsyncMock
 
@@ -334,9 +380,10 @@ def test_all_uploads_over_old_30_and_3_limits_then_new_upload_same_day(environme
         for index in range(35):
             db.execute(
                 "INSERT INTO source_items(source_id,external_id,source_url,original_text,"
-                "original_language,published_at,payload_hash,raw_payload_json) "
+                "original_language,published_at,payload_hash,raw_payload_json,media_metadata_json) "
                 "SELECT source_id,?,source_url,original_text,original_language,published_at,"
-                "?,raw_payload_json FROM source_items WHERE external_id='abcdefghijk'",
+                "?,raw_payload_json,media_metadata_json "
+                "FROM source_items WHERE external_id='abcdefghijk'",
                 (f"new{index}", f"hash{index}"),
             )
     repository.set_runtime_setting("scheduled_video:123:2026-09-12", "completed")
@@ -352,9 +399,10 @@ def test_all_uploads_over_old_30_and_3_limits_then_new_upload_same_day(environme
     with repository.connection() as db:
         db.execute(
             "INSERT INTO source_items(source_id,external_id,source_url,original_text,"
-            "original_language,published_at,payload_hash,raw_payload_json) "
+            "original_language,published_at,payload_hash,raw_payload_json,media_metadata_json) "
             "SELECT source_id,'later',source_url,original_text,original_language,published_at,"
-            "'laterhash',raw_payload_json FROM source_items WHERE external_id='abcdefghijk'"
+            "'laterhash',raw_payload_json,media_metadata_json "
+            "FROM source_items WHERE external_id='abcdefghijk'"
         )
     assert (
         asyncio.run(send_video_recommendations(bot, settings, repository, chat_id=OWNER))["sent"]
@@ -388,14 +436,15 @@ def test_channel_delivery_excludes_private_history_and_prefollow_uploads(environ
     )
 
 
-def test_video_interest_reveals_short_long_and_original_url(environment):
+@pytest.mark.parametrize("action", ["open", "interest"])
+def test_video_menu_open_reveals_outputs_and_records_navigation_not_like(environment, action):
     _, repository, router = environment
     recommendation_id = insert_video(repository, recommendation=True)
     query = FakeCallback()
     asyncio.run(
         handler(router, "video_handler")(
             query,
-            VideoControl(recommendation_id=recommendation_id, action="interest"),
+            VideoControl(recommendation_id=recommendation_id, action=action),
         )
     )
     keyboard = buttons(query.message.reply_markup)
@@ -407,7 +456,8 @@ def test_video_interest_reveals_short_long_and_original_url(environment):
     assert actions == ["short", "long", "dismiss"]
     assert [button.url for button in keyboard if button.url] == [VIDEO_URL]
     with repository.connection() as db:
-        assert db.execute("SELECT action FROM video_feedback_events").fetchone()[0] == "interest"
+        assert db.execute("SELECT action FROM video_feedback_events").fetchone()[0] == "open"
+        assert db.execute("SELECT count(*) FROM video_result_feedback").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize(
@@ -464,7 +514,7 @@ def test_video_summary_callback_queues_requested_mode_without_network(
     assert job["status"] == "queued"
     assert query.message.answers == []
     assert query.answers[0][0] == (
-        "Готовлю TL;DR текстом" if mode == "short" else "Готовлю подробный PDF-отчёт"
+        "Готовлю сводку здесь" if mode == "short" else "Готовлю PDF"
     )
 
 

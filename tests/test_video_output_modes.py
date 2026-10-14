@@ -100,7 +100,8 @@ def test_short_prompt_quality_and_same_provider():
     request, reserve = tldr_request(source_payload(transcript(), VIDEO))
     assert request["model"] == MODEL and request["provider"]["allow_fallbacks"] is False
     assert request["messages"][0]["content"] == PROMPT and PROMPT != PDF_PROMPT
-    assert "около 120 слов" in PROMPT and "не раздувай" in PROMPT
+    assert "2000–2400" in PROMPT and "3–4 связных абзаца" in PROMPT
+    assert "не раздувай" in PROMPT
     assert request["max_tokens"] == 4096 and reserve < 0.05
 
 
@@ -141,15 +142,25 @@ def test_short_worker_sends_exactly_one_text_and_no_pdf(env):
     assert kwargs["reply_parameters"].message_id == 777
     assert kwargs["link_preview_options"].is_disabled
     final = bot.edit_message_text.call_args.kwargs
-    assert final["text"] == "<b>TL;DR</b>\n\n" + LEAD
+    assert final["text"] == (
+        "<b>Тест</b>\n\n"
+        + LEAD
+        + f'\n\n<a href="https://www.youtube.com/watch?v={VIDEO}">Смотреть видео</a>'
+    )
     assert final["message_id"] == 88
-    button = final["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Длинный отчёт · PDF"
     with repo.connection() as db:
         job = dict(db.execute("SELECT * FROM video_pdf_jobs").fetchone())
     assert job["status"] == "sent" and job["text_message_id"] == 88
     assert job["document_message_id"] is None
-    assert button.callback_data == f"vreport:long:{job['id']}"
+    rows = final["reply_markup"].inline_keyboard
+    assert [button.text for button in rows[0]] == ["👍 Полезно", "👎 Не полезно"]
+    assert [button.callback_data for button in rows[0]] == [
+        f"vr:{job['id']}:like",
+        f"vr:{job['id']}:dislike",
+    ]
+    assert [button.text for button in rows[1]] == ["Краткая сводка", "Подробный отчёт · PDF"]
+    assert rows[1][1].callback_data == f"vp:{job['panel_id']}:pdf"
+    assert rows[-1][0].text == "← К описанию"
 
 
 @pytest.mark.parametrize("explicit,kind", [(False, "tldr"), (True, "pdf")])
@@ -218,7 +229,7 @@ def test_long_button_authorized_idempotent_and_reuses_transcript(env, invalid):
         assert not asyncio.run(worker.tick())
 
 
-def test_pdf_only_while_upload_animates_then_progress_is_deleted(env, monkeypatch):
+def test_pdf_upload_animates_then_panel_retains_navigation(env, monkeypatch):
     from app.telegram_bot.progress import ProgressPulse
 
     settings, repo, service, _, bot = env
@@ -256,24 +267,48 @@ def test_pdf_only_while_upload_animates_then_progress_is_deleted(env, monkeypatc
 
     asyncio.run(run())
     assert all(pulse.task.done() for pulse in pulses)
-    assert bot.send_message.await_count == 1  # Only the temporary animation.
+    assert bot.send_message.await_count == 1  # One panel, retained after uploading the file.
     bot.send_document.assert_awaited_once()
-    bot.delete_message.assert_awaited_once_with(chat_id=123, message_id=88)
+    bot.delete_message.assert_not_awaited()
+    final = bot.edit_message_text.call_args.kwargs
+    assert final["message_id"] == 88
+    assert [button.text for button in final["reply_markup"].inline_keyboard[0]] == [
+        "Краткая сводка",
+        "Подробный отчёт · PDF",
+    ]
     with repo.connection() as db:
         row = db.execute("SELECT * FROM video_pdf_jobs").fetchone()
         assert row["status"] == "sent" and row["document_message_id"] == 99
+        panel = db.execute("SELECT * FROM video_panels WHERE id=?", (row["panel_id"],)).fetchone()
+        assert panel["message_id"] == 88 and panel["view"] == "card"
+        assert final["text"] == panel["original_html"]
 
 
-def test_pdf_cleanup_failure_never_resends_document(env):
+def test_pdf_panel_restore_failure_never_resends_document(env):
     settings, repo, service, _, bot = env
     enqueue(settings, repo, service, VIDEO, 123, 123, 777)
-    bot.delete_message.side_effect = ConnectionError()
+    failed_restore = []
+
+    async def edit(**kwargs):
+        if kwargs["text"] == (
+            '<b>Видео</b>\n\n<a href="https://www.youtube.com/watch?v='
+            + VIDEO
+            + '">Смотреть видео</a>'
+        ):
+            failed_restore.append(kwargs["message_id"])
+            raise ConnectionError()
+
+    bot.edit_message_text.side_effect = edit
     worker = VideoReportWorker(bot, settings, repo, service=service)
     assert asyncio.run(worker.tick())
     worker.recover()
     assert not asyncio.run(worker.tick())
     bot.send_document.assert_awaited_once()
     assert bot.send_message.await_count == 1
+    assert failed_restore == [88]
+    with repo.connection() as db:
+        row = db.execute("SELECT status,document_message_id FROM video_pdf_jobs").fetchone()
+        assert tuple(row) == ("sent", 99)
 
 
 def test_pdf_failed_delivery_keeps_status_for_error(env):
@@ -297,7 +332,11 @@ def test_progress_claim_is_shared_by_parallel_handlers_and_worker(env):
     asyncio.run(run())
     assert bot.send_message.await_count == 1
     assert calls == ["transcript", "tldr"]
-    assert bot.edit_message_text.call_args.kwargs["text"].endswith(LEAD)
+    rendered = bot.edit_message_text.call_args.kwargs["text"]
+    assert LEAD in rendered
+    assert rendered.endswith(
+        f'<a href="https://www.youtube.com/watch?v={VIDEO}">Смотреть видео</a>'
+    )
 
 
 def test_progress_has_real_stages_and_cache_does_not_regenerate(env):
@@ -330,7 +369,11 @@ def test_unknown_progress_send_is_not_replayed_and_summary_still_delivers(env):
     assert bot.send_message.await_count == 1
     assert asyncio.run(VideoReportWorker(bot, settings, repo, service=service).tick())
     assert bot.send_message.await_count == 2
-    assert bot.send_message.call_args.kwargs["text"].endswith(LEAD)
+    rendered = bot.send_message.call_args.kwargs["text"]
+    assert LEAD in rendered
+    assert rendered.endswith(
+        f'<a href="https://www.youtube.com/watch?v={VIDEO}">Смотреть видео</a>'
+    )
     assert calls == ["transcript", "tldr"]
 
 
@@ -572,7 +615,7 @@ def test_pdf_and_short_use_same_lock(env):
     [
         "Без заголовка",
         "## TL;DR\n\n",
-        "## TL;DR\n\nАбзац.\n\nВторой.",
+        "## TL;DR\n\n" + "\n\n".join(["Абзац."] * 5),
         SHORT + "\n## Подробно\nТекст",
         SHORT + " [[E0001]]",
         SHORT + " https://example.org",

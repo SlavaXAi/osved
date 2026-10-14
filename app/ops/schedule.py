@@ -75,6 +75,11 @@ def fresh_research_events(
             WHERE events.status = 'candidate'
               AND COALESCE(events.event_type, '') != 'system_test'
               AND {FRESH_EVENT_SQL}
+              AND (sources.kind!='youtube' OR
+                  CASE WHEN json_valid(source_items.media_metadata_json) THEN
+                    json_extract(source_items.media_metadata_json,'$.is_short')=0 END
+                  OR EXISTS (SELECT 1 FROM youtube_video_types type
+                    WHERE type.video_id=source_items.external_id AND type.is_short=0))
               AND NOT EXISTS (SELECT 1 FROM cards
                   WHERE cards.event_id = events.id AND {finished_card_sql()})
               AND NOT EXISTS (SELECT 1 FROM event_fact_sheets facts
@@ -151,13 +156,23 @@ def fresh_delivery_card_ids(
 ) -> list[int]:
     with repository.connection() as connection:
         rows = connection.execute(
-            f"""SELECT events.*, cards.id AS card_id, cards.source_urls_json FROM cards
+            f"""SELECT events.*, cards.id AS card_id, cards.created_at AS card_created_at,
+                julianday(cards.created_at) AS card_created_jd,
+                cards.source_urls_json FROM cards
             JOIN events ON events.id = cards.event_id
             JOIN source_items ON source_items.id = events.primary_source_item_id
+            JOIN sources ON sources.id = source_items.source_id
             WHERE {finished_card_sql()}
               AND events.status NOT IN ('merged', 'rejected')
               AND COALESCE(events.event_type, '') != 'system_test'
-              AND {FRESH_EVENT_SQL}
+              AND CASE WHEN events.event_type='concept_brief'
+                  THEN julianday(cards.created_at) BETWEEN julianday(?) AND julianday(?)
+                  ELSE ({FRESH_EVENT_SQL}) END
+              AND (sources.kind!='youtube' OR
+                  CASE WHEN json_valid(source_items.media_metadata_json) THEN
+                    json_extract(source_items.media_metadata_json,'$.is_short')=0 END
+                  OR EXISTS (SELECT 1 FROM youtube_video_types type
+                    WHERE type.video_id=source_items.external_id AND type.is_short=0))
               AND NOT EXISTS (SELECT 1 FROM cards newer
                   WHERE newer.event_id = cards.event_id AND {finished_card_sql("newer")}
                   AND newer.id > cards.id)
@@ -168,8 +183,10 @@ def fresh_delivery_card_ids(
                         OR EXISTS (SELECT 1 FROM feedback_events feedback
                             WHERE feedback.delivery_id = deliveries.id
                               AND feedback.reaction IS NOT NULL)))
-            ORDER BY events.score DESC, events.latest_source_at DESC, cards.id DESC LIMIT ?""",
-            (*_fresh_window(now), owner_id, 150),
+            ORDER BY CASE WHEN events.event_type='concept_brief' THEN 0 ELSE 1 END,
+              CASE WHEN events.event_type='concept_brief' THEN julianday(cards.created_at) END,
+              events.score DESC, events.latest_source_at DESC, cards.id DESC LIMIT ?""",
+            (*_fresh_window(now), *_fresh_window(now), owner_id, 150),
         ).fetchall()
     # Reconcile confirmed emergency/manual sends without inventing delivery IDs
     # or overwriting the live database with an old local copy.
@@ -189,12 +206,32 @@ def fresh_delivery_card_ids(
     # Diversify the actual delivered batch, not only upstream candidates. A
     # high-scoring company must not monopolize a backlog built on different days.
     ranked = rank_event_candidates(
-        unseen,
+        [row for row in unseen if row["event_type"] != "concept_brief"],
         recent_events=repository.recent_valid_card_events(days=2),
         limit=max(0, limit),
         now=now,
     )
-    return [int(row["card_id"]) for row in ranked]
+    # One concept can join the normal batch without competing against the
+    # event/news score scale. Keep a daily cadence when a backlog accumulated.
+    with repository.connection() as connection:
+        day_start = now.astimezone(MOSCOW).replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        concept_count = connection.execute(
+            "SELECT COUNT(*) FROM deliveries d JOIN cards c ON c.id=d.card_id "
+            "JOIN events e ON e.id=c.event_id WHERE d.chat_id=? "
+            "AND e.event_type='concept_brief' AND d.delivery_status!='failed' "
+            "AND julianday(COALESCE(d.delivered_at,d.created_at))>=julianday(?) "
+            "AND julianday(COALESCE(d.delivered_at,d.created_at))<julianday(?)",
+            (owner_id, day_start.isoformat(), day_end.isoformat()),
+        ).fetchone()[0]
+    concepts = sorted(
+        [row for row in unseen if row["event_type"] == "concept_brief"],
+        key=lambda row: (row["card_created_jd"], row["card_id"]),
+    )
+    regular = [int(row["card_id"]) for row in ranked if row["event_type"] != "concept_brief"]
+    if concepts and concept_count < 2 and limit > 0:
+        return [int(concepts[0]["card_id"]), *regular][:limit]
+    return regular[:limit]
 
 
 JOB_TIMES: dict[JobType, tuple[clock_time, ...]] = {
@@ -386,6 +423,19 @@ class ScheduledJobExecutor:
         }
 
     def research(self) -> dict[str, Any]:
+        from app.radar.concepts import prepare_concept_brief
+
+        concepts = prepare_concept_brief(self.settings, self.repository, now=self.current_time())
+        news = self.research_news()
+        return {
+            **news,
+            "concepts": concepts,
+            "cards_created": news.get("cards_created", 0) + concepts["cards_created"],
+            "cost_usd": news.get("cost_usd", 0) + concepts["cost_usd"],
+            "errors": news.get("errors", 0) + concepts["errors"],
+        }
+
+    def research_news(self) -> dict[str, Any]:
         target = self.settings.scheduled_news_per_batch
         owner_id = configured_owner_id(self.settings, self.repository)
         ready = (

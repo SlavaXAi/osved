@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
-from app.config import Settings
+import pytest
+
+from app.config import Settings, SourceConfig, SourceRegistry
+from app.db.repository import Repository
 from app.telegram_bot.bot import (
     build_router,
     delivery_keyboard,
@@ -23,6 +27,7 @@ from app.telegram_bot.keyboards import (
     DetailsCallback,
     FeedbackCallback,
 )
+from app.telegram_bot.news_panel import NewsPanelControl
 
 
 class FakeDetailsRepository:
@@ -192,6 +197,87 @@ class FakeCallbackQuery:
         self.answers.append((text, show_alert))
 
 
+@pytest.fixture(autouse=True)
+def isolate_legacy_fake_reader(monkeypatch):
+    from app.telegram_bot import bot
+
+    original = bot.get_news_panel
+    monkeypatch.setattr(
+        bot,
+        "get_news_panel",
+        lambda repository, delivery_id: (
+            None
+            if isinstance(repository, FakeDetailsRepository)
+            else original(repository, delivery_id)
+        ),
+    )
+
+
+class ReaderBot:
+    def __init__(self, calls):
+        self.calls = calls
+        self.edited_text = []
+        self.edited_markup = []
+
+    async def edit_message_text(self, **kwargs):
+        self.calls.append("edit_text")
+        self.edited_text.append(kwargs)
+
+    async def edit_message_reply_markup(self, **kwargs):
+        self.calls.append("edit")
+        self.edited_markup.append(kwargs)
+
+    async def send_message(self, **kwargs):
+        raise AssertionError("News-reader results must stay in the original message")
+
+
+@pytest.fixture
+def real_reader_env(tmp_path):
+    settings = Settings(_env_file=None, allowed_user_id=123, data_dir=tmp_path)
+    repo = Repository(settings.database_path)
+    repo.migrate()
+    repo.sync_sources(
+        SourceRegistry(
+            version=1,
+            sources=[
+                SourceConfig(
+                    id="fixture",
+                    name="Fixture",
+                    kind="rss",
+                    locator="https://example.org/feed",
+                    role="radar",
+                    region="global",
+                    language="ru",
+                )
+            ],
+        )
+    )
+    delivery = repo.create_smoke_delivery(123, "https://example.org/release")
+    repo.mark_delivery_sent(delivery["delivery_id"], 700)
+    draft = {
+        "headline": "Компания открыла новый инструмент",
+        "lead": "Инструмент помогает выполнять рабочие задачи через API. "
+        "Компания описала ограничения и способ проверки результата.",
+    }
+    with repo.connection() as db:
+        db.execute(
+            "UPDATE events SET event_type='company_event' WHERE id=?", (delivery["event_id"],)
+        )
+        db.execute(
+            "UPDATE cards SET structured_output_json=?,rendered_html=? WHERE id=?",
+            (
+                json.dumps(draft, ensure_ascii=False),
+                "<b>Компания открыла новый инструмент</b>\n\nПроверенный исходный контекст.",
+                delivery["card_id"],
+            ),
+        )
+    calls = []
+    query = FakeCallbackQuery(calls)
+    query.bot = ReaderBot(calls)
+    router = build_router(settings, repo)
+    return settings, repo, delivery, query, router
+
+
 def _router_handler(router, name: str):
     return next(
         handler.callback
@@ -206,87 +292,91 @@ def _message_handler(router, name: str):
     )
 
 
-def test_details_callback_enqueues_and_answers_before_telegram_markup_edit() -> None:
-    repository = FakeDetailsRepository()
-    settings = Settings(allowed_user_id=123, details_enabled=True, _env_file=None)
-    router = build_router(settings, repository)  # type: ignore[arg-type]
+def test_details_callback_enqueues_and_answers_before_original_message_edit(
+    real_reader_env,
+) -> None:
+    _, repository, delivery, query, router = real_reader_env
     handler = _router_handler(router, "details_callback_handler")
-    query = FakeCallbackQuery(repository.calls)
+    asyncio.run(handler(query, DetailsCallback(delivery_id=delivery["delivery_id"])))
+    request = repository.detail_request_for_delivery(delivery["delivery_id"], depth="article")
+    assert request["status"] == "queued" and request["depth"] == "article"
+    assert request["placeholder_message_id"] == 700
+    assert query.calls == ["answer", "edit_text"]
+    assert query.answers == [("Собираю дополнительные источники", False)]
+    result = query.bot.edited_text[-1]
+    assert result["message_id"] == 700
+    labels = [button.text for row in result["reply_markup"].inline_keyboard for button in row]
+    assert "Подробнее" in labels and "← Назад" in labels
+    assert any(label.startswith("Готовлю") for label in labels)
+    with repository.connection() as db:
+        assert db.execute("SELECT count(*) FROM usage_ledger").fetchone()[0] == 0
 
-    asyncio.run(handler(query, DetailsCallback(delivery_id=7)))
 
-    assert repository.calls == ["enqueue", "answer", "edit"]
-    assert query.answers == [("Собираю подробный разбор", False)]
-    assert query.message.reply_markup.inline_keyboard[1][0].text == "Разбор готовится…"
-
-
-def test_details_callback_rejects_a_foreign_or_stale_message() -> None:
-    repository = FakeDetailsRepository()
-    settings = Settings(allowed_user_id=123, details_enabled=True, _env_file=None)
+def test_details_callback_rejects_a_foreign_or_stale_message(real_reader_env) -> None:
+    _, repository, delivery, query, router = real_reader_env
     handler = _router_handler(
-        build_router(settings, repository),  # type: ignore[arg-type]
+        router,
         "details_callback_handler",
     )
 
-    wrong_chat = FakeCallbackQuery(repository.calls)
+    wrong_chat = FakeCallbackQuery(query.calls)
     wrong_chat.message.chat.id = 999
-    asyncio.run(handler(wrong_chat, DetailsCallback(delivery_id=7)))
+    asyncio.run(handler(wrong_chat, DetailsCallback(delivery_id=delivery["delivery_id"])))
 
-    wrong_message = FakeCallbackQuery(repository.calls)
+    wrong_message = FakeCallbackQuery(query.calls)
     wrong_message.message.message_id = 701
-    asyncio.run(handler(wrong_message, DetailsCallback(delivery_id=7)))
+    asyncio.run(handler(wrong_message, DetailsCallback(delivery_id=delivery["delivery_id"])))
 
-    assert repository.calls == ["answer", "answer"]
-    assert wrong_chat.answers == [("Кнопка не относится к этому сообщению", True)]
-    assert wrong_message.answers == [("Кнопка не относится к этому сообщению", True)]
+    assert query.calls == ["answer", "answer"]
+    assert wrong_chat.answers == [("Кнопка не относится к этой новости", True)]
+    assert wrong_message.answers == [("Кнопка не относится к этой новости", True)]
+    with repository.connection() as db:
+        assert db.execute("SELECT count(*) FROM detail_requests").fetchone()[0] == 0
 
 
-def test_details_callback_preserves_pending_superreaction_controls() -> None:
-    repository = FakeDetailsRepository()
-    repository.session = {
-        "delivery_id": 7,
-        "reaction": Reaction.SUPERLIKE.value,
-        "state": "awaiting_comment",
-    }
-    settings = Settings(allowed_user_id=123, details_enabled=True, _env_file=None)
+def test_details_callback_preserves_pending_comment_state_and_reader_navigation(
+    real_reader_env,
+) -> None:
+    _, repository, delivery, query, router = real_reader_env
+    repository.begin_feedback_session(delivery["delivery_id"], 123, Reaction.SUPERLIKE.value)
+    repository.set_feedback_session_state(
+        delivery["delivery_id"], "awaiting_comment", prompt_message_id=701
+    )
     handler = _router_handler(
-        build_router(settings, repository),  # type: ignore[arg-type]
+        router,
         "details_callback_handler",
     )
-    query = FakeCallbackQuery(repository.calls)
-
-    asyncio.run(handler(query, DetailsCallback(delivery_id=7)))
-
-    assert [row[0].text for row in query.message.reply_markup.inline_keyboard] == [
-        "💬 Прокомментировать",
-        "✅ Отправить молча",
-        "↩️ Назад",
-        "Разбор готовится…",
+    asyncio.run(handler(query, DetailsCallback(delivery_id=delivery["delivery_id"])))
+    assert repository.feedback_session_for_user(123)["state"] == "awaiting_comment"
+    labels = [
+        b.text for row in query.bot.edited_text[-1]["reply_markup"].inline_keyboard for b in row
     ]
+    assert "Подробнее" in labels and "← Назад" in labels
+    assert any(label.startswith("Готовлю") for label in labels)
 
 
-def test_failed_details_require_an_explicit_retry_click() -> None:
-    repository = FakeDetailsRepository()
-    repository.request = {
-        "request_id": 1,
-        "delivery_id": 7,
-        "event_id": 17,
-        "status": "failed",
-        "stage": "search",
-        "created": False,
-        "cache_hit": False,
-    }
-    settings = Settings(allowed_user_id=123, details_enabled=True, _env_file=None)
+def test_failed_details_require_an_explicit_retry_click(real_reader_env) -> None:
+    _, repository, delivery, query, router = real_reader_env
     handler = _router_handler(
-        build_router(settings, repository),  # type: ignore[arg-type]
+        router,
         "details_callback_handler",
     )
-    query = FakeCallbackQuery(repository.calls)
-
-    asyncio.run(handler(query, DetailsCallback(delivery_id=7)))
-
-    assert repository.calls == ["retry", "answer", "edit"]
-    assert query.message.reply_markup.inline_keyboard[1][0].text == "Разбор готовится…"
+    asyncio.run(handler(query, DetailsCallback(delivery_id=delivery["delivery_id"])))
+    request = repository.claim_next_detail_request()
+    repository.fail_detail_request(request["id"], error="Confirmed invalid response")
+    query.calls.clear()
+    asyncio.run(handler(query, DetailsCallback(delivery_id=delivery["delivery_id"])))
+    assert repository.get_detail_request(request["id"])["status"] == "failed"
+    markup = query.bot.edited_text[-1]["reply_markup"]
+    retry = next(b for row in markup.inline_keyboard for b in row if b.text == "↻ Повторить")
+    asyncio.run(
+        _router_handler(router, "news_panel_handler")(
+            query, NewsPanelControl.unpack(retry.callback_data)
+        )
+    )
+    retried = repository.get_detail_request(request["id"])
+    assert retried["status"] == "queued"
+    assert retried["reader_context"]["retry_authorization"]
 
 
 def test_detail_article_feedback_is_separate_from_news_reaction() -> None:
@@ -315,7 +405,7 @@ def test_detail_article_feedback_is_separate_from_news_reaction() -> None:
     assert query.answers == [("Оценка разбора сохранена", False)]
     assert [button.text for button in query.message.reply_markup.inline_keyboard[0]] == [
         "✅ 👍 Полезно",
-        "👎 Не окупилось",
+        "👎 Не полезно",
     ]
 
 
@@ -539,7 +629,7 @@ def test_placeholder_and_ready_delivery_edit_one_reply_in_place() -> None:
     assert bot.edited_text[0]["text"].startswith("<b>Подробный разбор</b>")
     assert [button.text for button in bot.edited_text[0]["reply_markup"].inline_keyboard[0]] == [
         "👍 Полезно",
-        "👎 Не окупилось",
+        "👎 Не полезно",
     ]
     assert bot.edited_markup[0]["reply_markup"].inline_keyboard[1][0].text == ("✅ Разбор готов")
     assert keyboard_synced == ["sent"]

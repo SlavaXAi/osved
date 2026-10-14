@@ -227,6 +227,10 @@ class RedditAdapter(_PublicAdapter):
 class YouTubeRSSAdapter(_PublicAdapter):
     strategies = ("feed", "channel_uploads")
 
+    def __init__(self, fetcher: PublicFetcher = fetch_public, *, fallback=None) -> None:
+        super().__init__(fetcher)
+        self.fallback = fallback
+
     def collect(self, request: CollectionRequest) -> CollectionBatch:
         try:
             locator = request.source.locator
@@ -241,9 +245,14 @@ class YouTubeRSSAdapter(_PublicAdapter):
                 channel = locator
             if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel):
                 raise PlatformError("YouTube source requires a UC channel ID (handles are not IDs)")
-            payload = self.fetcher(
-                f"https://www.youtube.com/feeds/videos.xml?channel_id={quote(channel)}"
-            )
+            try:
+                payload = self.fetcher(
+                    f"https://www.youtube.com/feeds/videos.xml?channel_id={quote(channel)}"
+                )
+            except PlatformError:
+                if self.fallback is None:
+                    raise
+                return self.fallback.collect(request, channel)
             if UNSAFE_XML_RE.search(payload):
                 raise PlatformError("Unsafe XML declaration", status="schema_changed")
             root = ElementTree.fromstring(payload)
@@ -587,14 +596,18 @@ class ZhihuSearchAdapter(_MonidAdapter):
 
 
 def build_platform_adapters(settings: Settings, repository: Any = None) -> dict[str, Any]:
-    del repository  # State and ingestion belong to the shared orchestrator.
     output_dir = settings.data_dir / "monid-runs"
     from app.collectors.platform_reddit_monid import RedditMonidAdapter
 
+    fallback = None
+    if settings.youtube_rss_fallback_enabled and repository is not None:
+        from app.collectors.youtube_fallback import YouTubeFallback
+
+        fallback = YouTubeFallback(settings, repository)
     return {
         "reddit_public": RedditAdapter(),
         "reddit_monid": RedditMonidAdapter(settings.data_dir / "reddit-cache"),
-        "youtube_rss": YouTubeRSSAdapter(),
+        "youtube_rss": YouTubeRSSAdapter(fallback=fallback),
         "v2ex_public": V2EXAdapter(),
         "x_search_monid": XSearchAdapter(output_dir),
         "weibo_search_monid": WeiboSearchAdapter(output_dir),

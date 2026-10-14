@@ -24,7 +24,6 @@ from aiogram.types import (
 
 from app.config import DeliveryFormat, Settings
 from app.db.repository import Repository
-from app.details.research import evaluate_detail_source_gate
 from app.details.worker import DetailWorker
 from app.llm.openrouter import CardDraft
 from app.pipeline.cards import render_article_rich_html
@@ -43,6 +42,19 @@ from app.telegram_bot.keyboards import (
 )
 from app.telegram_bot.news_demo import NewsDemoCallback, handle_news_demo
 from app.telegram_bot.news_depth import brief_card_html, depth_key
+from app.telegram_bot.news_panel import (
+    NewsPanelControl,
+    get_news_panel,
+    panel_keyboard,
+    refresh_markup,
+    show_error,
+    show_result,
+)
+from app.telegram_bot.news_reader import (
+    handle_news_action,
+    record_news_result_feedback,
+    terminal_text,
+)
 from app.telegram_bot.progress import DetailProgress, progress_text
 
 logger = logging.getLogger(__name__)
@@ -140,6 +152,9 @@ def delivery_keyboard(
 ) -> InlineKeyboardMarkup:
     """Render reaction and details state together so neither can erase the other."""
 
+    panel = get_news_panel(repository, delivery_id)
+    if panel is not None:
+        return panel_keyboard(repository, panel)
     include_details = details_enabled and _delivery_supports_details(repository, delivery_id)
     detail_request = (
         repository.detail_request_for_delivery(delivery_id) if include_details else None
@@ -167,6 +182,28 @@ def delivery_keyboard(
         details_state=detail_state,
         expanded=expanded,
     )
+
+
+async def _edit_delivery_markup(
+    bot, repository, delivery_id, *, user_id=None, current=None, details_enabled=True, message=None
+):
+    if get_news_panel(repository, delivery_id) is not None:
+        return await refresh_markup(bot, repository, delivery_id)
+    markup = delivery_keyboard(
+        repository, delivery_id, user_id=user_id, current=current, details_enabled=details_enabled
+    )
+    if message is not None:
+        await message.edit_reply_markup(reply_markup=markup)
+    else:
+        context = repository.get_delivery_context(delivery_id)
+        if not context or not context.get("telegram_message_id"):
+            return False
+        await bot.edit_message_reply_markup(
+            chat_id=context["chat_id"],
+            message_id=context["telegram_message_id"],
+            reply_markup=markup,
+        )
+    return True
 
 
 def details_acknowledgement(result: dict[str, Any]) -> tuple[str, bool]:
@@ -221,8 +258,10 @@ def build_router(settings: Settings, repository: Repository) -> Router:
     from app.telegram_bot.intelligence import register_intelligence_handlers
     from app.telegram_bot.sensory import register_sensory_handlers
     from app.telegram_bot.telegram_channels import register_telegram_channel_handlers
+    from app.telegram_bot.video_notes import register_video_note_handlers
     from app.telegram_bot.video_reports import register_video_report_handlers
 
+    register_video_note_handlers(router, settings, repository)
     register_intelligence_handlers(router, settings, repository)
     register_sensory_handlers(router, settings, repository)
     register_telegram_channel_handlers(router, settings, repository)
@@ -360,15 +399,12 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         repository.clear_feedback_session(session["delivery_id"])
         context = repository.get_delivery_context(session["delivery_id"])
         if context and context["telegram_message_id"]:
-            await message.bot.edit_message_reply_markup(
-                chat_id=context["chat_id"],
-                message_id=context["telegram_message_id"],
-                reply_markup=delivery_keyboard(
-                    repository,
-                    session["delivery_id"],
-                    user_id=user_id,
-                    details_enabled=_details_enabled(settings),
-                ),
+            await _edit_delivery_markup(
+                message.bot,
+                repository,
+                session["delivery_id"],
+                user_id=user_id,
+                details_enabled=_details_enabled(settings),
             )
         await message.answer("Комментарий отменён.")
 
@@ -398,14 +434,14 @@ def build_router(settings: Settings, repository: Repository) -> Router:
             await query.answer("Сохранено")
             try:
                 if query.message:
-                    await query.message.edit_reply_markup(
-                        reply_markup=delivery_keyboard(
-                            repository,
-                            delivery_id,
-                            user_id=user_id,
-                            current=reaction,
-                            details_enabled=_details_enabled(settings),
-                        )
+                    await _edit_delivery_markup(
+                        query.bot,
+                        repository,
+                        delivery_id,
+                        message=query.message,
+                        user_id=user_id,
+                        current=reaction,
+                        details_enabled=_details_enabled(settings),
                     )
             finally:
                 await advance_news(query.bot, delivery_id)
@@ -414,13 +450,13 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         if reaction and reaction.is_super:
             repository.begin_feedback_session(delivery_id, user_id, reaction.value)
             if query.message:
-                await query.message.edit_reply_markup(
-                    reply_markup=delivery_keyboard(
-                        repository,
-                        delivery_id,
-                        user_id=user_id,
-                        details_enabled=_details_enabled(settings),
-                    )
+                await _edit_delivery_markup(
+                    query.bot,
+                    repository,
+                    delivery_id,
+                    message=query.message,
+                    user_id=user_id,
+                    details_enabled=_details_enabled(settings),
                 )
             await query.answer()
             return
@@ -433,13 +469,13 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         if action == FeedbackAction.BACK:
             repository.clear_feedback_session(delivery_id)
             if query.message:
-                await query.message.edit_reply_markup(
-                    reply_markup=delivery_keyboard(
-                        repository,
-                        delivery_id,
-                        user_id=user_id,
-                        details_enabled=_details_enabled(settings),
-                    )
+                await _edit_delivery_markup(
+                    query.bot,
+                    repository,
+                    delivery_id,
+                    message=query.message,
+                    user_id=user_id,
+                    details_enabled=_details_enabled(settings),
                 )
             await query.answer("Отменено")
             return
@@ -454,14 +490,14 @@ def build_router(settings: Settings, repository: Repository) -> Router:
             await query.answer("Суперреакция сохранена")
             try:
                 if query.message:
-                    await query.message.edit_reply_markup(
-                        reply_markup=delivery_keyboard(
-                            repository,
-                            delivery_id,
-                            user_id=user_id,
-                            current=reaction,
-                            details_enabled=_details_enabled(settings),
-                        )
+                    await _edit_delivery_markup(
+                        query.bot,
+                        repository,
+                        delivery_id,
+                        message=query.message,
+                        user_id=user_id,
+                        current=reaction,
+                        details_enabled=_details_enabled(settings),
                     )
             finally:
                 await advance_news(query.bot, delivery_id)
@@ -483,8 +519,6 @@ def build_router(settings: Settings, repository: Repository) -> Router:
             )
             await query.answer()
 
-    depth_locks: dict[int, asyncio.Lock] = {}
-
     @router.callback_query(NewsDemoCallback.filter())
     async def news_demo_handler(query: CallbackQuery, callback_data: NewsDemoCallback) -> None:
         await handle_news_demo(
@@ -494,138 +528,44 @@ def build_router(settings: Settings, repository: Repository) -> Router:
             allowed=is_allowed(settings, repository, query.from_user.id),
         )
 
-    @router.callback_query(NewsDepthCallback.filter())
-    async def news_depth_handler(query: CallbackQuery, callback_data: NewsDepthCallback) -> None:
+    async def dispatch_news_action(query, delivery_id, action, *, page=0, revision=-1):
         if not is_allowed(settings, repository, query.from_user.id):
             await query.answer("Недоступно", show_alert=True)
             return
-        context = repository.get_delivery_context(callback_data.delivery_id)
-        if (
-            context is None
-            or query.message is None
-            or int(context["chat_id"]) != query.message.chat.id
-            or context.get("telegram_message_id") != query.message.message_id
-        ):
-            await query.answer("Кнопка не относится к этому сообщению", show_alert=True)
-            return
-        # This acknowledgement stops Telegram's spinner immediately. This path
-        # never enqueues research, consumes feedback or starts an API model.
-        await query.answer()
-        lock = depth_locks.setdefault(callback_data.delivery_id, asyncio.Lock())
-        async with lock:
-            repository.set_runtime_setting(
-                depth_key(callback_data.delivery_id),
-                "expanded" if callback_data.expanded else "brief",
+        try:
+            await handle_news_action(
+                query, repository, settings, delivery_id, action, page=page, revision=revision
             )
-            text = (
-                clean_news_html(context["rendered_html"])
-                if callback_data.expanded
-                else brief_card_html(context)
-            )
-            try:
-                await query.message.edit_text(
-                    text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=delivery_keyboard(
-                        repository,
-                        callback_data.delivery_id,
-                        user_id=query.from_user.id,
-                        details_enabled=_details_enabled(settings),
-                    ),
-                    link_preview_options=LinkPreviewOptions(
-                        url=context["primary_preview_url"],
-                        prefer_large_media=True,
-                        show_above_text=False,
-                    ),
+        except (ValueError, PermissionError) as exc:
+            await query.answer(str(exc), show_alert=True)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                logger.exception("Could not edit news panel %s", delivery_id)
+                await query.answer(
+                    "Не удалось обновить карточку. Попробуй открыть её снова.", show_alert=True
                 )
-            except TelegramBadRequest as exc:
-                if "message is not modified" not in str(exc).lower():
-                    raise
+
+    @router.callback_query(NewsPanelControl.filter())
+    async def news_panel_handler(query: CallbackQuery, callback_data: NewsPanelControl) -> None:
+        await dispatch_news_action(
+            query,
+            callback_data.delivery_id,
+            callback_data.action,
+            page=callback_data.page,
+            revision=callback_data.revision,
+        )
+
+    @router.callback_query(NewsDepthCallback.filter())
+    async def news_depth_handler(query: CallbackQuery, callback_data: NewsDepthCallback) -> None:
+        await dispatch_news_action(
+            query, callback_data.delivery_id, "expanded" if callback_data.expanded else "base"
+        )
 
     @router.callback_query(DetailsCallback.filter())
     async def details_callback_handler(
-        query: CallbackQuery,
-        callback_data: DetailsCallback,
+        query: CallbackQuery, callback_data: DetailsCallback
     ) -> None:
-        user_id = query.from_user.id
-        if not is_allowed(settings, repository, user_id):
-            await query.answer("Недоступно", show_alert=True)
-            return
-        if not _details_enabled(settings):
-            await query.answer("Подробные разборы временно выключены", show_alert=True)
-            return
-
-        delivery_id = callback_data.delivery_id
-        context = repository.get_delivery_context(delivery_id)
-        if context is None:
-            await query.answer("Карточка не найдена", show_alert=True)
-            return
-        if (
-            query.message is None
-            or int(context["chat_id"]) != int(query.message.chat.id)
-            or context.get("telegram_message_id") is None
-            or int(context["telegram_message_id"]) != int(query.message.message_id)
-        ):
-            await query.answer(
-                "Кнопка не относится к этому сообщению",
-                show_alert=True,
-            )
-            return
-        if not _delivery_supports_details(repository, delivery_id):
-            await query.answer("Для тестовой карточки разбор недоступен", show_alert=True)
-            return
-
-        try:
-            existing = repository.detail_request_for_delivery(delivery_id)
-            if existing is not None and existing.get("status") == "failed":
-                result = repository.retry_detail_request(int(existing["request_id"]))
-            elif (
-                existing is not None
-                and existing.get("status") == "insufficient_evidence"
-                and "full-text" in str(existing.get("last_error") or "")
-                and evaluate_detail_source_gate(
-                    repository.event_research_documents(int(context["event_id"])),
-                    event=repository.event_context(int(context["event_id"])),
-                ).valid
-            ):
-                # Explicit user retry after the missing-source condition changed.
-                # Cached valid evidence means no repeated blind search or loop.
-                result = repository.retry_detail_request(int(existing["request_id"]))
-            elif existing is not None and existing.get("status") in {
-                "insufficient_evidence",
-                "budget_blocked",
-            }:
-                result = existing
-            else:
-                result = repository.enqueue_detail_request(
-                    delivery_id,
-                    user_id,
-                    max_daily_new=_details_daily_limit(settings),
-                )
-        except Exception:
-            logger.exception("Could not enqueue detail request for delivery %s", delivery_id)
-            await query.answer("Не удалось поставить разбор в очередь", show_alert=True)
-            return
-
-        acknowledgement, show_alert = details_acknowledgement(result)
-        # Acknowledge before any markup edit. The edit is a separate Telegram
-        # round trip and must never delay the callback response.
-        await query.answer(acknowledgement, show_alert=show_alert)
-        if query.message:
-            await query.message.edit_reply_markup(
-                reply_markup=delivery_keyboard(
-                    repository,
-                    delivery_id,
-                    user_id=user_id,
-                    details_enabled=True,
-                )
-            )
-            request_id = result.get("request_id") or result.get("id")
-            if request_id is not None:
-                repository.mark_detail_keyboard_synced(
-                    int(request_id),
-                    detail_display_status(result),
-                )
+        await dispatch_news_action(query, callback_data.delivery_id, "article")
 
     @router.callback_query(DetailFeedbackCallback.filter())
     async def detail_feedback_callback_handler(
@@ -635,6 +575,28 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         user_id = query.from_user.id
         if not is_allowed(settings, repository, user_id):
             await query.answer("Недоступно", show_alert=True)
+            return
+        panel = get_news_panel(repository, callback_data.delivery_id)
+        if panel is not None:
+            if (
+                not query.message
+                or panel["chat_id"] != user_id
+                or panel["chat_id"] != query.message.chat.id
+                or panel["message_id"] != query.message.message_id
+            ):
+                await query.answer("Кнопка не относится к этому результату", show_alert=True)
+                return
+            request = repository.get_detail_request(panel.get("displayed_request_id") or -1)
+            if not request or request.get("article_id") != callback_data.article_id:
+                await query.answer("Сначала открой этот результат", show_alert=True)
+                return
+            try:
+                record_news_result_feedback(repository, panel, request, callback_data.action.value)
+            except PermissionError as exc:
+                await query.answer(str(exc), show_alert=True)
+                return
+            await query.answer("Оценка полезности сохранена")
+            await refresh_markup(query.bot, repository, callback_data.delivery_id)
             return
         action = (
             "detail_useful"
@@ -678,16 +640,13 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         context = repository.get_delivery_context(session["delivery_id"])
         try:
             if context and context["telegram_message_id"]:
-                await message.bot.edit_message_reply_markup(
-                    chat_id=context["chat_id"],
-                    message_id=context["telegram_message_id"],
-                    reply_markup=delivery_keyboard(
-                        repository,
-                        session["delivery_id"],
-                        user_id=user_id,
-                        current=reaction,
-                        details_enabled=_details_enabled(settings),
-                    ),
+                await _edit_delivery_markup(
+                    message.bot,
+                    repository,
+                    session["delivery_id"],
+                    user_id=user_id,
+                    current=reaction,
+                    details_enabled=_details_enabled(settings),
                 )
             await message.answer("Комментарий и суперреакция сохранены.")
         finally:
@@ -710,13 +669,14 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     try:
         await bot.set_my_commands(
             [
-                BotCommand(command="help", description="Как пользоваться ОСВЕД"),
+                BotCommand(command="help", description="Как пользоваться PARS"),
                 BotCommand(command="bio", description="Ежедневные биографии: статус и пауза"),
                 BotCommand(command="news", description="Получить ещё свежие новости"),
                 BotCommand(command="radar", description="Состояние радара и расходы"),
                 BotCommand(command="sources", description="Включить или выключить источники"),
                 BotCommand(command="tgchannels", description="Мои Telegram-каналы для радара"),
                 BotCommand(command="videos", description="Рекомендации подкастов и видео"),
+                BotCommand(command="circle", description="Превратить видео в кружочек"),
                 BotCommand(
                     command="channels", description="Добавить YouTube-каналы и управлять ими"
                 ),
@@ -843,6 +803,29 @@ async def send_ready_detail_articles(
             break
         claimed += 1
         request_id = _detail_request_id(request)
+        if request.get("depth", "legacy") != "legacy":
+            panel = get_news_panel(repository, request["delivery_id"])
+            artifact = repository.get_detailed_article(request["article_id"])
+            try:
+                visible = bool(
+                    panel
+                    and await show_result(
+                        bot, repository, panel, request, artifact, from_worker=True
+                    )
+                )
+                if visible:
+                    repository.mark_detail_request_sent(request_id)
+                    repository.mark_detail_keyboard_synced(request_id, "sent")
+                    sent += 1
+                else:
+                    repository.mark_detail_delivery_error(
+                        request_id, "Panel view changed or edit pending"
+                    )
+            except Exception as exc:
+                logger.exception("Could not deliver news-reader result %s", request_id)
+                repository.mark_detail_delivery_error(request_id, type(exc).__name__)
+                errors += 1
+            continue
         chat_id = int(request["chat_id"])
         parent_message_id = request.get("parent_message_id")
         source_urls = list(request.get("source_urls") or [])
@@ -884,16 +867,14 @@ async def send_ready_detail_articles(
             if not repository.mark_detail_request_sent(request_id):
                 raise RuntimeError(f"Could not mark detail request {request_id} sent")
             if parent_message_id is not None:
-                await bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=int(parent_message_id),
-                    reply_markup=delivery_keyboard(
-                        repository,
-                        int(request["delivery_id"]),
-                        user_id=int(request["user_id"]),
-                        details_enabled=True,
-                    ),
-                )
+                if not await _edit_delivery_markup(
+                    bot,
+                    repository,
+                    int(request["delivery_id"]),
+                    user_id=int(request["user_id"]),
+                    details_enabled=True,
+                ):
+                    raise RuntimeError("Could not refresh the current news menu")
                 repository.mark_detail_keyboard_synced(request_id, "sent")
             sent += 1
         except Exception as exc:
@@ -920,6 +901,21 @@ async def send_terminal_detail_results(
         request_id = _detail_request_id(request)
         status = str(request["status"])
         claim_lease_until = str(request["placeholder_lease_until"])
+        if request.get("depth", "legacy") != "legacy":
+            panel = get_news_panel(repository, request["delivery_id"])
+            try:
+                if panel:
+                    await show_error(bot, repository, panel, request, terminal_text(request))
+                if repository.mark_terminal_detail_placeholder_sent(
+                    request_id, status=status, claim_lease_until=claim_lease_until
+                ):
+                    sent += 1
+            except Exception:
+                repository.release_terminal_detail_placeholder_claim(
+                    request_id, status=status, claim_lease_until=claim_lease_until
+                )
+                errors += 1
+            continue
         try:
             await bot.edit_message_text(
                 chat_id=int(request["chat_id"]),
@@ -962,16 +958,15 @@ async def sync_detail_keyboards(
             continue
         display_status = str(request["display_status"])
         try:
-            await bot.edit_message_reply_markup(
-                chat_id=int(request["chat_id"]),
-                message_id=int(telegram_message_id),
-                reply_markup=delivery_keyboard(
-                    repository,
-                    int(request["delivery_id"]),
-                    user_id=int(request["user_id"]),
-                    details_enabled=True,
-                ),
-            )
+            if not await _edit_delivery_markup(
+                bot,
+                repository,
+                int(request["delivery_id"]),
+                user_id=int(request["user_id"]),
+                details_enabled=True,
+            ):
+                errors += 1
+                continue
             if repository.mark_detail_keyboard_synced(request_id, display_status):
                 synced += 1
         except Exception:

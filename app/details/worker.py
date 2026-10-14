@@ -9,13 +9,15 @@ from typing import Protocol
 from app.config import Settings
 from app.db.repository import Repository
 from app.details.models import DetailArticleBuildResult
+from app.details.provider_guard import DetailProviderError
 from app.details.research import (
     DetailBudgetError,
     DetailEvidenceError,
     DetailGenerationError,
     build_detail_article,
+    detail_max_cost,
 )
-from app.research.detail_policy import DETAIL_PROMPT_VERSION, DETAIL_SCHEMA_VERSION
+from app.research.detail_policy import article_reference_fingerprint, detail_policy_versions
 
 
 class DetailBuilder(Protocol):
@@ -27,6 +29,8 @@ class DetailBuilder(Protocol):
         *,
         generation_key: str | None = None,
         progress: Callable[[str], None] | None = None,
+        depth: str = "legacy",
+        reader_context: dict | None = None,
     ) -> DetailArticleBuildResult: ...
 
 
@@ -85,9 +89,23 @@ class DetailWorker:
 
         request_id = int(request["request_id"])
         generation_key = str(request["generation_key"])
-        cached = self.repository.cached_detailed_article(generation_key)
+        depth = str(request.get("depth") or "legacy")
+        reader_context = dict(request.get("reader_context") or {})
+        fingerprint = reader_context.get("context_fingerprint")
+        cache_options = (
+            {
+                "depth": depth,
+                "context_fingerprint": fingerprint,
+                "reader_context": reader_context,
+            }
+            if depth != "legacy"
+            else {}
+        )
+        cached = self.repository.cached_detailed_article(generation_key, **cache_options)
         if cached is None:
-            cached = self.repository.cached_detailed_article_for_event(int(request["event_id"]))
+            cached = self.repository.cached_detailed_article_for_event(
+                int(request["event_id"]), **cache_options
+            )
         if cached is not None:
             attached = self.repository.complete_detail_request_from_cache(
                 request_id,
@@ -127,6 +145,14 @@ class DetailWorker:
                 # Let the builder include the selected document hash in the final key.
                 generation_key=None,
                 progress=lambda stage: self._progress(request_id, stage),
+                **({"depth": depth, "reader_context": reader_context} if depth != "legacy" else {}),
+            )
+        except DetailProviderError as exc:
+            error = f"Detail provider {exc.status}; call_id={exc.call_id}"
+            status = "budget_blocked" if exc.status == "budget_blocked" else "failed"
+            self.repository.fail_detail_request(request_id, status=status, error=error)
+            return DetailWorkerResult(
+                request_id=request_id, status=status, cost_usd=float(exc.cost_usd), error=error
             )
         except DetailEvidenceError as exc:
             error = str(exc)
@@ -190,19 +216,39 @@ class DetailWorker:
                 cost_usd=result.cost_usd,
                 error=error,
             )
+        expected_schema, expected_prompt = detail_policy_versions(depth)
         if (
-            result.prompt_version != DETAIL_PROMPT_VERSION
-            or result.schema_version != DETAIL_SCHEMA_VERSION
+            result.prompt_version != expected_prompt
+            or result.schema_version != expected_schema
+            or result.depth != depth
         ):
             error = "Detail builder returned an outdated evidence-policy artifact"
             self.repository.fail_detail_request(request_id, status="failed", error=error)
             return DetailWorkerResult(
                 request_id=request_id, status="failed", cost_usd=result.cost_usd, error=error
             )
-        if result.cost_usd > self.max_cost_usd:
-            error = (
-                f"detail request cost ${result.cost_usd:.6f} exceeded ${self.max_cost_usd:.6f} cap"
+        if (
+            result.event_id != int(request["event_id"])
+            or (
+                depth != "legacy"
+                and result.reader_context.get("context_fingerprint") != fingerprint
             )
+            or (
+                depth == "article"
+                and article_reference_fingerprint(result.reader_context)
+                != article_reference_fingerprint(reader_context)
+            )
+        ):
+            error = (
+                "Detail builder returned an artifact for another event or frozen reader baseline"
+            )
+            self.repository.fail_detail_request(request_id, status="failed", error=error)
+            return DetailWorkerResult(
+                request_id=request_id, status="failed", cost_usd=result.cost_usd, error=error
+            )
+        max_cost = detail_max_cost(self.settings, depth)
+        if result.cost_usd > max_cost:
+            error = f"detail request cost ${result.cost_usd:.6f} exceeded ${max_cost:.6f} cap"
             self.repository.fail_detail_request(
                 request_id,
                 status="budget_blocked",
@@ -233,6 +279,15 @@ class DetailWorker:
             validation_errors=result.validation_errors,
             generation_cost_usd=result.cost_usd,
             expires_at=result.expires_at,
+            **(
+                {
+                    "depth": depth,
+                    "reader_context": reader_context,
+                    "context_fingerprint": fingerprint,
+                }
+                if depth != "legacy"
+                else {}
+            ),
         )
         return DetailWorkerResult(
             request_id=request_id,

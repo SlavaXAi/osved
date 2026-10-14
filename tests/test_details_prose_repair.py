@@ -39,10 +39,7 @@ def test_actual_luna_snapshot_rejects_clipping_and_bracket_markers_without_erasi
 def test_details_provider_does_not_force_character_clipping(deep_generator_context):
     _, repo, snapshot, docs = deep_generator_context
     payload = build_deep_article_request(
-        model="openai/gpt-5.6-luna",
-        event=repo.event,
-        snapshot=snapshot,
-        documents=docs,
+        model="openai/gpt-5.6-luna", event=repo.event, snapshot=snapshot, documents=docs,
     )
     schema = json.dumps(payload["response_format"]["json_schema"]["schema"])
     assert "maxLength" not in schema and "minLength" not in schema
@@ -66,51 +63,31 @@ class ArticleSequence:
         if self.outcomes[index] == "bad":
             draft = draft.model_copy(update={"lead": draft.lead + " [source marker]"})
         return draft, DetailProviderCall(
-            model=kwargs["model"],
-            response_id=f"fixture-{index}",
-            prompt_tokens=100,
-            completion_tokens=50,
-            reported_cost_usd=0.002,
-            accounted_cost_usd=0.002,
+            model=kwargs["model"], response_id=f"fixture-{index}", prompt_tokens=100,
+            completion_tokens=50, reported_cost_usd=0.002, accounted_cost_usd=0.002,
         )
 
 
 @pytest.mark.parametrize("outcomes", [["good"], ["bad", "good"], ["bad", "bad"]])
 def test_details_repair_is_bounded_with_unchanged_facts_and_full_cost(
-    deep_generator_context,
-    outcomes,
+    deep_generator_context, outcomes,
 ):
     settings, repo, snapshot, docs = deep_generator_context
-    settings = settings.model_copy(
-        update={
-            "openrouter_card_model": "fixture/model",
-            "openrouter_fallback_model": "fixture/model",
-            "openrouter_model": "fixture/model",
-        }
-    )
+    settings = settings.model_copy(update={
+        "openrouter_card_model": "fixture/model", "openrouter_fallback_model": "fixture/model",
+        "openrouter_model": "fixture/model",
+    })
     generator = ArticleSequence(outcomes)
     before = snapshot.model_dump()
     if outcomes[-1] == "bad":
         with pytest.raises(DetailGenerationError) as raised:
             generate_deep_article(
-                settings,
-                repo,
-                7,
-                snapshot,
-                docs,
-                generator=generator,
-                max_cost_usd=0.02,
+                settings, repo, 7, snapshot, docs, generator=generator, max_cost_usd=0.02,
             )
         cost = raised.value.cost_usd
     else:
         result = generate_deep_article(
-            settings,
-            repo,
-            7,
-            snapshot,
-            docs,
-            generator=generator,
-            max_cost_usd=0.02,
+            settings, repo, 7, snapshot, docs, generator=generator, max_cost_usd=0.02,
         )
         cost = result.cost_usd
         assert validate_deep_article(result.draft, snapshot=snapshot, documents=docs) == []
@@ -131,26 +108,17 @@ def test_details_repair_obeys_remaining_request_budget(deep_generator_context):
     generator = ArticleSequence(["bad"])
     with pytest.raises(DetailBudgetError) as raised:
         generate_deep_article(
-            settings,
-            repo,
-            7,
-            snapshot,
-            docs,
-            generator=generator,
-            max_cost_usd=0.003,
+            settings, repo, 7, snapshot, docs, generator=generator, max_cost_usd=0.003,
         )
     assert raised.value.cost_usd == 0.002
     assert len(generator.calls) == 1
 
 
-@pytest.mark.parametrize(
-    "internal",
-    [
-        "Доступные facts позволяют описать заявленные меры.",
-        "Во facts содержится описание продукта.",
-        "В предоставленном evidence нет сведений об аудите.",
-    ],
-)
+@pytest.mark.parametrize("internal", [
+    "Доступные facts позволяют описать заявленные меры.",
+    "Во facts содержится описание продукта.",
+    "В предоставленном evidence нет сведений об аудите.",
+])
 def test_actual_internal_packet_jargon_is_not_published(internal):
     draft = valid_article()
     draft = draft.model_copy(update={"lead": draft.lead + " " + internal})

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote, unquote, urlsplit
 from xml.etree import ElementTree
 
-from app.collectors.platform_transport import fetch_public, monid_fetch, unwrap_data
+from app.collectors.platform_transport import PlatformError, fetch_public, monid_fetch, unwrap_data
 from app.collectors.rss import UNSAFE_XML_RE
 from app.config import Settings, runtime_source_registry
 from app.db.repository import Repository
@@ -177,10 +177,26 @@ class ChannelService:
             except ChannelError:
                 raise
             except Exception as exc:
-                raise ChannelError(
-                    "YouTube пока не отдал публичную ленту. Канал не добавлен; "
-                    "попробуй ссылку позже, повторного распознавания не потребуется."
-                ) from exc
+                reason = str(exc) if isinstance(exc, PlatformError) else type(exc).__name__
+                if self.settings.youtube_rss_fallback_enabled:
+                    from app.collectors.youtube_fallback import YouTubeFallback
+
+                    try:
+                        listing, _, _ = YouTubeFallback(self.settings, self.repository).channel(
+                            channel
+                        )
+                        title = listing["title"]
+                    except PlatformError as fallback_error:
+                        raise ChannelError(
+                            f"YouTube RSS недоступен ({reason}). "
+                            f"Резервная проверка не завершена: {fallback_error}. "
+                            "Канал не добавлен; повторное распознавание не потребуется."
+                        ) from fallback_error
+                else:
+                    raise ChannelError(
+                        f"YouTube RSS недоступен ({reason}). Канал не добавлен; "
+                        "нужна проверка доступа к лентам. Повторное распознавание не потребуется."
+                    ) from exc
             seed = next(
                 (s for s in registry.sources if s.kind.value == "youtube" and s.locator == channel),
                 None,

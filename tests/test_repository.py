@@ -33,6 +33,10 @@ def test_migrations_and_source_sync_are_idempotent(tmp_path: Path) -> None:
         "0017_video_output_modes",
         "0018_telegram_channels",
         "0019_biographies",
+        "0020_awareness_preferences",
+        "0021_video_relevance",
+        "0022_video_panel_feedback",
+        "0023_news_reader",
     ]
     assert repository.migrate() == []
     assert repository.sync_sources(registry) == 26

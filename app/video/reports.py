@@ -83,7 +83,7 @@ def model_transport(payload: dict, key: str) -> dict:
         headers={
             "Authorization": "Bearer " + key,
             "Content-Type": "application/json",
-            "User-Agent": "OSVED-summary-AB/1",
+            "User-Agent": "PARS-summary-AB/1",
         },
     )
     with urlopen(request, timeout=300) as response:
@@ -391,10 +391,36 @@ class VideoReportService:
                 raise ReportError(str(exc) if str(exc) in known else "invalid_output") from exc
 
     def cached_tldr(self, video: str) -> str | None:
+        from app.video.tldr import LEGACY_VERSIONS, extract_tldr
         from app.video.tldr import VERSION as TLDR_VERSION
-        from app.video.tldr import extract_tldr
 
         video = youtube_video_id(video)
+        for version in (TLDR_VERSION, *LEGACY_VERSIONS):
+            directory = self.root / video / ("tldr-" + version)
+            path = directory / "result.json"
+            if path.is_file():
+                try:
+                    value = read_json(path)
+                    text = extract_tldr(value["original"])
+                    legacy = " ".join(
+                        value["original"].removeprefix("## TL;DR").strip().splitlines()
+                    )
+                    digest = value["text_sha256"]
+                    if digest in (
+                        hashlib.sha256(text.encode()).hexdigest(),
+                        hashlib.sha256(legacy.encode()).hexdigest(),
+                    ):
+                        return text
+                except (ValueError, OSError, KeyError, TypeError):
+                    pass
+            if version in LEGACY_VERSIONS and (directory / "response.json").is_file():
+                try:
+                    response = read_json(directory / "response.json")
+                    choice = response["choices"][0]
+                    if response.get("model") == MODEL and choice.get("finish_reason") == "stop":
+                        return extract_tldr(choice["message"]["content"])
+                except (ValueError, OSError, KeyError, TypeError, IndexError):
+                    pass
         if self.cached_pdf(video):
             try:
                 return extract_tldr(
@@ -402,20 +428,11 @@ class VideoReportService:
                 )
             except (ValueError, OSError):
                 pass
-        path = self.root / video / ("tldr-" + TLDR_VERSION) / "result.json"
-        if path.is_file():
-            try:
-                value = read_json(path)
-                text = extract_tldr(value["original"])
-                if hashlib.sha256(text.encode()).hexdigest() == value["text_sha256"]:
-                    return text
-            except (ValueError, OSError, KeyError, TypeError):
-                pass
         return None
 
     def build_tldr(self, video: str, *, progress: Callable[[str], None] | None = None) -> str:
+        from app.video.tldr import LEGACY_VERSIONS, extract_tldr, tldr_request
         from app.video.tldr import VERSION as TLDR_VERSION
-        from app.video.tldr import extract_tldr, tldr_request
 
         video = youtube_video_id(video)
         report_progress(progress, "preparing")
@@ -436,6 +453,29 @@ class VideoReportService:
             if cached is not None:
                 report_progress(progress, "cache")
                 return cached
+            for version in LEGACY_VERSIONS:
+                legacy = folder / ("tldr-" + version)
+                if (legacy / "llm-started.json").exists():
+                    marker = read_json(legacy / "llm-started.json")
+                    error_path = legacy / "llm-errors" / f"{marker.get('ledger_id')}.json"
+                    error = read_json(error_path) if error_path.is_file() else {}
+                    if (
+                        error.get("http_status") != 402
+                        or error.get("rejected_before_dispatch") is not True
+                        or error.get("ledger_id") != marker.get("ledger_id")
+                        or marker.get("ledger_id") is None
+                    ):
+                        raise ReportError("uncertain")
+                    self._settle(
+                        marker["ledger_id"],
+                        0,
+                        {
+                            "video_id": video,
+                            "http_status": 402,
+                            "rejected_before_dispatch": True,
+                            "legacy_rejection": True,
+                        },
+                    )
             try:
                 if self.settings.openrouter_api_key is None:
                     raise ReportError("disabled")
@@ -476,7 +516,7 @@ class VideoReportService:
                 original = choice.get("message", {}).get("content")
                 if response.get("model") != MODEL or choice.get("finish_reason") != "stop":
                     raise ReportError("invalid_output")
-                text = extract_tldr(original)
+                text = extract_tldr(original, require_finished_sentences=True)
                 save_json(
                     directory / "result.json",
                     {

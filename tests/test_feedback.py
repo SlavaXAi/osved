@@ -34,11 +34,12 @@ def test_reaction_types_and_keyboards() -> None:
     keyboard = reaction_keyboard(1)
     reaction_buttons = keyboard.inline_keyboard[0]
     assert [button.text for button in reaction_buttons] == ["⛔", "👎", "👍", "🔥"]
-    assert [button.text for button in keyboard.inline_keyboard[1]] == ["Подробнее"]
+    assert [button.text for button in keyboard.inline_keyboard[1]] == ["Подробнее", "Статья"]
     assert FeedbackCallback.unpack(reaction_buttons[0].callback_data).action == (
         FeedbackAction.SUPERDISLIKE
     )
     assert NewsDepthCallback.unpack(keyboard.inline_keyboard[1][0].callback_data).delivery_id == 1
+    assert DetailsCallback.unpack(keyboard.inline_keyboard[1][1].callback_data).delivery_id == 1
 
     super_keyboard = superreaction_keyboard(1)
     assert [row[0].text for row in super_keyboard.inline_keyboard] == [
@@ -87,7 +88,7 @@ def test_details_can_be_omitted_from_smoke_keyboard() -> None:
 def test_detail_article_feedback_keyboard_has_its_own_callback_namespace() -> None:
     keyboard = detail_feedback_keyboard(7, 91)
     buttons = keyboard.inline_keyboard[0]
-    assert [button.text for button in buttons] == ["👍 Полезно", "👎 Не окупилось"]
+    assert [button.text for button in buttons] == ["👍 Полезно", "👎 Не полезно"]
     callback = DetailFeedbackCallback.unpack(buttons[1].callback_data)
     assert callback.delivery_id == 7
     assert callback.article_id == 91

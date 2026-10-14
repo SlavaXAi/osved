@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -14,7 +16,6 @@ from app.collectors.telegram import canonical_http_url
 from app.config import Settings
 from app.db.repository import Repository
 from app.details.models import (
-    DETAIL_PROMPT_VERSION,
     DeepArticleDraft,
     DeepSourceAnchor,
     DetailArticleBuildResult,
@@ -24,7 +25,10 @@ from app.details.models import (
     DetailResearchPlan,
     DetailSourceGate,
     GeneratedDeepArticleDraft,
+    NewsReaderDepth,
 )
+from app.details.paging import telegram_html_visible_units
+from app.details.provider_guard import DetailProviderError, DurableDetailProvider
 from app.details.renderer import (
     detail_article_visible_text,
     render_detail_article_html,
@@ -49,6 +53,7 @@ from app.llm.openrouter import (
 from app.ops.budget import evaluate_budget
 from app.pipeline.numbers import extract_numeric_values
 from app.pipeline.telegram_style import NEWS_STYLE_INSTRUCTION
+from app.research.detail_policy import article_reference_fingerprint, detail_policy_versions
 from app.research.facts import (
     EditorialHook,
     FactSheetDraft,
@@ -68,6 +73,7 @@ from app.research.web import (
     SEARCH_PROVIDER,
     SEARCH_RESULT_COST_USD,
     MonidWebResearchClient,
+    SearchResponse,
     WebResearchError,
     build_research_query,
     classify_source,
@@ -171,6 +177,280 @@ class DetailResearchCollection:
     search_count: int
     scrape_count: int
     cost_usd: float
+    additional_document_ids: tuple[int, ...] = ()
+    target_additional_sources: int = 0
+
+
+def reader_target_units(depth: NewsReaderDepth, reader_context: dict[str, Any]) -> int:
+    if depth == "legacy":
+        return 0
+    if depth == "article" and reader_context.get("expanded_reference_units"):
+        expanded = int(reader_context["expanded_reference_units"])
+        if expanded > 0:
+            return expanded * 2
+    text = str(reader_context.get("baseline_text") or "")
+    baseline = len(text.encode("utf-16-le")) // 2
+    if not baseline:
+        baseline = int(reader_context.get("baseline_units") or 0)
+    if baseline <= 0:
+        raise ValueError("News reader requires the frozen visible baseline text")
+    return baseline * (2 if depth == "expanded" else 4)
+
+
+def reader_reference_text(depth: NewsReaderDepth, reader_context: dict[str, Any]) -> str:
+    if depth == "article" and reader_context.get("expanded_reference_text"):
+        return str(reader_context["expanded_reference_text"])
+    return str(reader_context.get("baseline_text") or "")
+
+
+def detail_max_cost(settings: Settings, depth: NewsReaderDepth = "legacy") -> float:
+    if depth == "legacy":
+        return float(_detail_limit(settings, "details_max_cost_usd", DETAIL_MAX_COST_USD))
+    return float(
+        getattr(
+            settings, f"news_reader_{depth}_max_cost_usd", 0.05 if depth == "expanded" else 0.08
+        )
+    )
+
+
+def _reader_baseline_urls(reader_context: dict[str, Any]) -> set[str]:
+    return {
+        canonical_http_url(str(url))
+        for url in reader_context.get("baseline_source_urls", [])
+        if canonical_http_url(str(url))
+    }
+
+
+def reader_announcement_scope(event: dict[str, Any], reader_context: dict[str, Any]) -> bool:
+    if _high_risk_event(event):
+        return False
+    return any(
+        classify_source(url) == "primary"
+        and re.search(
+            r"/(?:legal|policies|policy|usage-policy|terms)(?:/|$)|"
+            r"(?:^|[-/])(?:usage-policy|acceptable-use-policy)(?:[-/]|$)",
+            urlsplit(url).path,
+            re.I,
+        )
+        for url in _reader_baseline_urls(reader_context)
+    )
+
+
+def reader_policy_focus(event, reader_context):
+    if not reader_announcement_scope(event, reader_context):
+        return None
+    original_url = next(
+        (
+            url
+            for url in sorted(_reader_baseline_urls(reader_context))
+            if "usage-policy" in urlsplit(url).path
+        ),
+        None,
+    )
+    if not original_url:
+        return None
+    subject = (
+        str(event.get("headline") or "") + " " + str(reader_context.get("baseline_text") or "")
+    ).casefold()
+    return {
+        "url": original_url,
+        "title": urlsplit(original_url).path.rsplit("/", 1)[-1].replace("-", " "),
+        "company": registrable_domain(original_url).split(".")[0],
+        "focal_terms": ["abus", "cruel", "model welfare"]
+        if re.search(r"оскорб|жесток|обращени|abus|cruel|welfare", subject)
+        else [],
+    }
+
+
+def reader_focus_links(documents, reader_context, focus):
+    if not focus:
+        return []
+    baseline_ids = {int(value) for value in reader_context.get("baseline_document_ids", [])}
+    links = []
+    for document in documents:
+        if int(document["id"]) not in baseline_ids:
+            continue
+        body = str(document.get("content_text") or "").split("[Share on Twitter]")[0]
+        for label, target in re.findall(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", body):
+            target = canonical_http_url(target)
+            if (
+                target
+                and target not in _reader_baseline_urls(reader_context)
+                and registrable_domain(target) == registrable_domain(focus["url"])
+                and re.search(r"usage policy|abus|cruel|model welfare", label, re.I)
+            ):
+                links.append(target)
+    return list(dict.fromkeys(links))
+
+
+def _reader_event(event, depth, reader_context):
+    if depth == "legacy":
+        return event
+    scoped = dict(event)
+    ignored = {
+        "news",
+        "blog",
+        "blogs",
+        "index",
+        "html",
+        "docs",
+        "legal",
+        "update",
+        "updates",
+        "release",
+        "releases",
+        "latest",
+        "introducing",
+        "launching",
+        "announcement",
+    }
+    for url in sorted(_reader_baseline_urls(reader_context)):
+        if urlsplit(url).hostname in {"x.com", "twitter.com", "t.me", "youtube.com"}:
+            continue
+        words = [
+            word
+            for word in re.findall(r"[a-z]{4,}", urlsplit(url).path.casefold())
+            if word not in ignored
+        ]
+        if len(words) >= 2:
+            scoped["_reader_baseline_identity"] = " ".join(dict.fromkeys(words))
+            break
+    if reader_announcement_scope(event, reader_context):
+        scoped.update(event_type="company_event", _reader_announcement_only=True)
+        scoped["_reader_policy_focus"] = reader_policy_focus(event, reader_context)
+    return scoped
+
+
+READER_ERROR_HEADING = re.compile(
+    r"(?:403\s+forbidden|access\s+denied|just\s+a\s+moment|"
+    r"checking\s+(?:your\s+)?browser(?:\s+before\s+accessing[^\n]*)?|"
+    r"verify\s+(?:that\s+)?you\s+are\s+human(?:\s+to\s+continue)?|"
+    r"(?:please\s+)?enable\s+(?:javascript|java\s+script)(?:\s+and\s+cookies)?"
+    r"(?:\s+to\s+continue)?|(?:please\s+)?sign\s+in\s+to\s+"
+    r"(?:continue|read(?:\s+this\s+article)?)|"
+    r"subscribe(?:\s+or\s+sign\s+in)?\s+to\s+(?:continue|read(?:\s+this\s+article)?))"
+    r"[\s.!…:]*",
+    re.I,
+)
+
+
+def reader_error_page(document: dict[str, Any]) -> bool:
+    """Reject recognizable response/challenge headings, never topic mentions."""
+    body = str(document.get("content_text") or "").lstrip("\ufeff \t\r\n")
+    headings = [str(document.get("title") or ""), str(_metadata(document).get("title") or "")]
+    first_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    headings.append(first_line)
+    # HTML challenges often arrive without newlines; only the page title and
+    # first main heading count, not later section headings in a real article.
+    for tag in ("title", "h1"):
+        match = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", body[:4000], re.I | re.S)
+        if match:
+            headings.append(match[1])
+    return any(
+        READER_ERROR_HEADING.fullmatch(
+            html.unescape(re.sub(r"<[^>]+>", "", heading)).strip(" #>*_`\t\r\n")
+        )
+        for heading in headings
+    )
+
+
+def reader_document_relevant(
+    document: dict[str, Any], event: dict[str, Any], reader_context: dict[str, Any]
+) -> bool:
+    if reader_error_page(document):
+        return False
+    # A primary publisher may have many unrelated product pages. Its role alone
+    # cannot make those pages supporting research for this event.
+    baseline_ids = {int(value) for value in reader_context.get("baseline_document_ids", [])}
+    if int(document.get("id") or 0) in baseline_ids:
+        return True
+    if not relevant_search_result(
+        event,
+        {
+            "url": document.get("url"),
+            "title": document.get("title"),
+            "description": str(document.get("content_text") or "")[:12000],
+        },
+    ):
+        return False
+    focus = reader_policy_focus(event, reader_context)
+    if focus:
+        canonical = canonical_http_url(
+            str(document.get("canonical_url") or document.get("url") or "")
+        )
+        if canonical in reader_context.get("_reader_focus_links", []):
+            return True
+        identity = (
+            str(document.get("title") or "")
+            + " "
+            + urlsplit(str(document.get("url") or "")).path.replace("-", " ")
+        ).casefold()
+        if "usage policy" in identity or any(term in identity for term in focus["focal_terms"]):
+            return True
+        for paragraph in re.split(r"\n\s*\n|\n", str(document.get("content_text") or "")[:12000]):
+            prose = re.sub(r"\[[^\]\n]+\]\([^)]*\)|https?://\S+", "", paragraph).casefold()
+            if (
+                len(prose.strip()) >= 60
+                and "usage policy" in prose
+                and (
+                    not focus["focal_terms"] or any(term in prose for term in focus["focal_terms"])
+                )
+            ):
+                return True
+        return False
+    ignored = {
+        "news",
+        "blog",
+        "blogs",
+        "index",
+        "html",
+        "docs",
+        "www",
+        "com",
+        "org",
+        "legal",
+        "update",
+        "updates",
+        "release",
+        "releases",
+        "latest",
+        "introducing",
+        "launching",
+    }
+    markers = {
+        token.casefold()
+        for url in _reader_baseline_urls(reader_context)
+        if urlsplit(url).hostname not in {"x.com", "twitter.com", "t.me", "youtube.com"}
+        for token in re.findall(r"[a-zA-Z]{4,}", urlsplit(url).path)
+        if token.casefold() not in ignored
+    }
+    if not markers:
+        return True
+    identity = (
+        str(document.get("title") or "") + " " + urlsplit(str(document.get("url") or "")).path
+    ).casefold()
+    if any(marker in identity for marker in markers):
+        return True
+    content = str(document.get("content_text") or "")[:12000].casefold()
+    for paragraph in re.split(r"\n\s*\n|\n", content):
+        prose = re.sub(r"\[[^\]\n]+\]\([^)]*\)|https?://\S+", "", paragraph)
+        if len(prose.strip()) >= 60 and any(marker in prose for marker in markers):
+            return True
+    return False
+
+
+def _reader_additional_ids(
+    documents: list[dict[str, Any]], reader_context: dict[str, Any]
+) -> list[int]:
+    baseline_ids = {int(value) for value in reader_context.get("baseline_document_ids", [])}
+    baseline_urls = _reader_baseline_urls(reader_context)
+    return [
+        int(document["id"])
+        for document in documents
+        if int(document["id"]) not in baseline_ids
+        and canonical_http_url(str(document.get("canonical_url") or document.get("url") or ""))
+        not in baseline_urls
+    ]
 
 
 @dataclass(frozen=True)
@@ -308,9 +588,12 @@ def evaluate_detail_source_gate(
     }
 
     errors: list[str] = []
-    if len(domains) < 2:
+    announcement_only = bool(event and event.get("_reader_announcement_only"))
+    if announcement_only and not primary_ids:
+        errors.append("company-policy reader requires an actually read primary document")
+    if not announcement_only and len(domains) < 2:
         errors.append("detail research requires two full-text documents from distinct domains")
-    if not independent_ids:
+    if not announcement_only and not independent_ids:
         errors.append("detail research requires an independent full-text source")
     if event and _high_risk_event(event) and len(independent_domains) < 2:
         errors.append("high-risk event requires two independent full-text domains")
@@ -465,6 +748,19 @@ class DetailResearchPlanner:
         queries = [f"{first} {first_suffix}".strip(), f"{identity} {suffix}".strip()]
         # Avoid paying twice for effectively identical queries.
         queries = list(dict.fromkeys(queries))[:DETAIL_MAX_SEARCHES]
+        focus = event.get("_reader_policy_focus")
+        if focus:
+            clause = ' ("abusive" OR "cruel" OR "model welfare")' if focus["focal_terms"] else ""
+            queries = [
+                f'{focus["company"]} "{focus["title"]}"',
+                f'{focus["company"]} "Usage Policy"{clause}',
+            ]
+        elif event.get("_reader_baseline_identity"):
+            identity = event["_reader_baseline_identity"]
+            queries = [
+                f'"{identity}" official source',
+                f'"{identity}" independent analysis limitations',
+            ]
         return DetailResearchPlan(
             contour=contour,
             known_fact_count=known_fact_count,
@@ -528,27 +824,85 @@ class BoundedDetailResearchService:
         event_id: int,
         *,
         progress: ProgressCallback | None = None,
+        depth: NewsReaderDepth = "legacy",
+        reader_context: dict[str, Any] | None = None,
     ) -> DetailResearchCollection:
+        reader_context = reader_context or {}
+        target_additional = 0 if depth == "legacy" else 3 if depth == "expanded" else 6
+
+        def choose(documents):
+            if depth != "legacy":
+                documents = [
+                    document
+                    for document in documents
+                    if reader_document_relevant(document, event, reader_context)
+                ]
+            return select_detail_documents(
+                documents, event=event, limit=DETAIL_MAX_SCRAPES if depth == "legacy" else 16
+            )
+
+        def complete(selected, gate):
+            return gate.valid and (
+                depth == "legacy"
+                or len(_reader_additional_ids(selected, reader_context)) >= target_additional
+            )
+
         event = self.repository.event_context(event_id)
         if event is None:
             raise ValueError(f"Unknown event_id: {event_id}")
+        event = _reader_event(event, depth, reader_context)
         documents = self.repository.event_research_documents(event_id)
+        focus_links = reader_focus_links(
+            documents, reader_context, event.get("_reader_policy_focus")
+        )
+        if focus_links:
+            reader_context = {**reader_context, "_reader_focus_links": focus_links}
         fact_sheet = self.repository.latest_valid_fact_sheet(event_id)
         known_fact_count = len((fact_sheet or {}).get("facts") or [])
         plan = self.planner.plan(event, documents, known_fact_count=known_fact_count)
         if progress:
             progress("planning")
 
-        selected = select_detail_documents(documents, event=event)
+        selected = choose(documents)
         gate = evaluate_detail_source_gate(selected, event=event)
-        if gate.valid:
-            return DetailResearchCollection(plan, selected, gate, 0, 0, 0.0)
+        if complete(selected, gate):
+            return DetailResearchCollection(
+                plan,
+                selected,
+                gate,
+                0,
+                0,
+                0.0,
+                tuple(_reader_additional_ids(selected, reader_context)),
+                target_additional,
+            )
 
         max_searches = int(
-            _detail_limit(self.settings, "details_max_searches", DETAIL_MAX_SEARCHES)
+            _detail_limit(
+                self.settings,
+                "details_max_searches" if depth == "legacy" else "news_reader_max_searches",
+                DETAIL_MAX_SEARCHES,
+            )
         )
-        max_scrapes = int(_detail_limit(self.settings, "details_max_scrapes", DETAIL_MAX_SCRAPES))
-        max_cost = float(_detail_limit(self.settings, "details_max_cost_usd", DETAIL_MAX_COST_USD))
+        scrape_setting = (
+            "details_max_scrapes"
+            if depth == "legacy"
+            else "news_reader_expanded_max_scrapes"
+            if depth == "expanded"
+            else "news_reader_article_max_scrapes"
+        )
+        max_scrapes = int(
+            _detail_limit(
+                self.settings,
+                scrape_setting,
+                DETAIL_MAX_SCRAPES if depth == "legacy" else 6 if depth == "expanded" else 8,
+            )
+        )
+        max_cost = detail_max_cost(self.settings, depth)
+        if depth != "legacy":
+            # Reading pages cannot spend the headroom needed to turn verified
+            # material into a fact snapshot and a rewritten result.
+            max_cost = max(0.0, max_cost - (0.030 if depth == "expanded" else 0.045))
         expires_at = (datetime.now(UTC) + timedelta(days=DEFAULT_CACHE_DAYS)).isoformat()
         known_urls = self.repository.event_evidence_urls(event_id)
         primary_url = infer_event_primary_url(event, known_urls)
@@ -564,35 +918,55 @@ class BoundedDetailResearchService:
         search_count = 0
         scrape_count = 0
         searched_urls: set[str] = set()
-        for query in plan.queries[:max_searches]:
-            if gate.valid:
+        query_jobs = ([None] if focus_links else []) + list(plan.queries[:max_searches])
+        for query in query_jobs:
+            if complete(selected, gate):
                 break
-            predicted = 10 * SEARCH_RESULT_COST_USD
+            predicted = 10 * SEARCH_RESULT_COST_USD if query is not None else 0.0
             if total_cost + predicted > max_cost:
                 raise DetailBudgetError("Per-request detail budget stop before web search")
             _check_monthly_budget(self.settings, self.repository, predicted)
             if progress:
                 progress("search")
-            search = self.client.search(query, freshness="last_month", num_results=10)
-            search_count += 1
+            search_count += int(query is not None)
+            try:
+                search = (
+                    self.client.search(query, freshness="last_month", num_results=10)
+                    if query is not None
+                    else SearchResponse(query="linked primary context", results=[], cost_usd=0)
+                )
+            except WebResearchError as exc:
+                if depth == "legacy":
+                    raise
+                total_cost += float(getattr(exc, "cost_usd", 0.0))
+                if getattr(exc, "status", "failed") in {"budget_blocked", "insufficient_credits"}:
+                    if isinstance(exc.__cause__, DetailProviderError):
+                        raise exc.__cause__ from None
+                    raise DetailBudgetError(
+                        "Research provider cannot continue", cost_usd=total_cost
+                    ) from exc
+                # An unread failed query contributes no documents. A different
+                # planned query may still find useful pages within the budget.
+                continue
             total_cost += search.cost_usd
-            self.repository.record_research_query(
-                event_id=event_id,
-                provider=SEARCH_PROVIDER,
-                query=search.query,
-                freshness="last_month",
-                status="completed",
-                results=search.results,
-                cost_usd=search.cost_usd,
-                expires_at=expires_at,
-            )
-            self.repository.record_usage(
-                "monid/context.dev",
-                "details.web.search",
-                cost_usd=search.cost_usd,
-                output_units=len(search.results),
-                metadata={"event_id": event_id, "query": search.query},
-            )
+            if query is not None:
+                self.repository.record_research_query(
+                    event_id=event_id,
+                    provider=SEARCH_PROVIDER,
+                    query=search.query,
+                    freshness="last_month",
+                    status="completed",
+                    results=search.results,
+                    cost_usd=search.cost_usd,
+                    expires_at=expires_at,
+                )
+                self.repository.record_usage(
+                    "monid/context.dev",
+                    "details.web.search",
+                    cost_usd=search.cost_usd,
+                    output_units=len(search.results),
+                    metadata={"event_id": event_id, "query": search.query},
+                )
 
             current_documents = self.repository.event_research_documents(event_id)
             existing_by_url = {
@@ -602,6 +976,7 @@ class BoundedDetailResearchService:
                 for document in current_documents
             }
             candidates: list[tuple[str, str, float, dict[str, Any]]] = []
+            candidates.extend((url, "primary", 1.2, {}) for url in focus_links)
             if primary_url:
                 candidates.append((primary_url, "primary", 1.1, {}))
             for result in search.results:
@@ -669,7 +1044,18 @@ class BoundedDetailResearchService:
                 scrape_count += 1
                 try:
                     scraped = self.client.scrape(url)
-                except WebResearchError:
+                except WebResearchError as exc:
+                    if depth != "legacy":
+                        total_cost += float(getattr(exc, "cost_usd", 0.0))
+                        if getattr(exc, "status", "failed") in {
+                            "budget_blocked",
+                            "insufficient_credits",
+                        }:
+                            if isinstance(exc.__cause__, DetailProviderError):
+                                raise exc.__cause__ from None
+                            raise DetailBudgetError(
+                                "Research provider cannot continue", cost_usd=total_cost
+                            ) from exc
                     continue
                 total_cost += scraped.cost_usd
                 canonical = canonical_http_url(
@@ -702,18 +1088,35 @@ class BoundedDetailResearchService:
                     metadata={"event_id": event_id, "url": canonical},
                 )
                 documents = self.repository.event_research_documents(event_id)
-                selected = select_detail_documents(documents, event=event)
+                selected = choose(documents)
                 gate = evaluate_detail_source_gate(selected, event=event)
                 # Prefer three sources when they are available from the same search,
                 # but two distinct domains are a valid bounded stopping condition.
-                if gate.valid and len(gate.eligible_document_ids) >= 3:
+                if complete(selected, gate) and (
+                    depth != "legacy" or len(gate.eligible_document_ids) >= 3
+                ):
                     break
             documents = self.repository.event_research_documents(event_id)
-            selected = select_detail_documents(documents, event=event)
+            selected = choose(documents)
             gate = evaluate_detail_source_gate(selected, event=event)
 
         if not gate.valid:
             raise DetailEvidenceError(gate.errors, cost_usd=total_cost)
+        additional_ids = _reader_additional_ids(selected, reader_context)
+        if depth != "legacy" and not additional_ids:
+            raise DetailEvidenceError(
+                ["No additional relevant full-text source beyond the original card"],
+                cost_usd=total_cost,
+            )
+        if (
+            depth != "legacy"
+            and len(additional_ids) < target_additional
+            and not reader_context.get("allow_partial_sources", True)
+        ):
+            raise DetailEvidenceError(
+                [f"Read {len(additional_ids)} additional sources; target is {target_additional}"],
+                cost_usd=total_cost,
+            )
         return DetailResearchCollection(
             plan=plan,
             documents=selected,
@@ -721,6 +1124,8 @@ class BoundedDetailResearchService:
             search_count=search_count,
             scrape_count=scrape_count,
             cost_usd=total_cost,
+            additional_document_ids=tuple(additional_ids),
+            target_additional_sources=target_additional,
         )
 
 
@@ -884,6 +1289,12 @@ def validate_detail_fact_draft(
         fact.kind == "benchmark" for fact in draft.facts
     ):
         errors.append("model release detail requires a grounded benchmark fact")
+    if event.get("_reader_announcement_only"):
+        for fact in draft.facts:
+            if fact.kind == "benchmark" or re.search(
+                r"независим\w*\s+(?:тест\w*|проверк\w*|подтвержден\w*)", fact.text, re.I
+            ):
+                errors.append("company-policy announcement cannot assert independent performance")
     return list(dict.fromkeys(errors))
 
 
@@ -935,12 +1346,15 @@ def build_detail_fact_snapshot(
     *,
     generator: OpenRouterFactSheetGenerator | None = None,
     max_cost_usd: float | None = None,
+    depth: NewsReaderDepth = "legacy",
+    reader_context: dict[str, Any] | None = None,
 ) -> DetailFactSnapshotGeneration:
     """Create a v3-derived evidence snapshot without changing canonical event state."""
 
     event = repository.event_context(event_id)
     if event is None:
         raise ValueError(f"Unknown event_id: {event_id}")
+    event = _reader_event(event, depth, reader_context or {})
     gate = evaluate_detail_source_gate(documents, event=event)
     if not gate.valid:
         raise DetailEvidenceError(gate.errors)
@@ -990,17 +1404,29 @@ def build_detail_fact_snapshot(
             provider.accounted_cost_usd,
         )
         typed = normalize_event_type(result.draft, str(event.get("headline") or ""))
+        if event.get("_reader_announcement_only"):
+            typed = typed.model_copy(update={"event_type": "company_event"})
         deduplicated = deduplicate_fact_sheet(typed)
         sanitized, warnings = sanitize_fact_sheet(
             deduplicated,
             documents,
             event_headline=str(event.get("headline") or ""),
         )
+        if event.get("_reader_announcement_only") and not any(
+            _independent_class(_document_evidence_class(document)) for document in documents
+        ):
+            sanitized = sanitized.model_copy(
+                update={
+                    "coverage": sanitized.coverage.model_copy(
+                        update={"independent_confirmation": False}
+                    )
+                }
+            )
         fallback_hook = _detail_hook_fallback(sanitized, event, documents)
         if sanitized.editorial_hook is None and fallback_hook is not None:
             sanitized = sanitized.model_copy(update={"editorial_hook": fallback_hook})
             warnings.append("editorial_hook selected by detail lexical fallback")
-        sanitized = _trim_detail_facts(sanitized)
+        sanitized = _trim_detail_facts(sanitized, limit=10 if depth == "legacy" else 14)
         errors = validate_detail_fact_draft(
             sanitized,
             documents,
@@ -1080,7 +1506,7 @@ def build_deep_article_request(
             if document_id in documents_by_id
         ],
     }
-    return {
+    request = {
         "model": model,
         "messages": [
             {
@@ -1174,6 +1600,56 @@ def build_deep_article_request(
             },
         },
     }
+    reader = event.get("_news_reader")
+    if isinstance(reader, dict):
+        target = int(reader["target_units"])
+        request["messages"][0]["content"] += (
+            "\nЭто цельный новый пост для уровня чтения " + str(reader["depth"]) + ". "
+            "Полностью перепиши сообщение, а не дописывай продолжение к старому. "
+            f"Мягкий целевой объём — около {target} видимых знаков, включая заголовок: "
+            "Для expanded это примерно вдвое больше исходной карточки; для article — "
+            "вдвое больше уже показанного «Подробнее», если оно есть, иначе вчетверо "
+            "больше исходной карточки. "
+            "Это ориентир содержания, не квота: не увеличивай текст повторами и водой. "
+            "Раскрой новую информацию из дополнительных прочитанных источников. "
+            "Строй связные абзацы с понятными переходами; секции служат структурой "
+            "данных, их названия читателю не показываются. Длинный пост будет разбит "
+            "на страницы автоматически: лимит 4096 на весь материал не действует."
+            " Для этого уровня прежний фиксированный ориентир 2000–3500 знаков "
+            "и нижняя граница 1000 знаков не применяются."
+        )
+        required_new_fact_ids = reader.get("required_new_fact_ids") or []
+        if required_new_fact_ids:
+            request["messages"][0]["content"] += (
+                " Минимум один из обязательных новых фактов должен содержательно "
+                "раскрываться в лиде или основном абзаце и входить в его fact_ids. "
+                "Одного упоминания в заголовке, highlight или ограничения недостаточно; "
+                "не добавляй ID нового факта к старому абзацу без его содержания."
+            )
+            request["messages"][1]["content"] += (
+                "\nОбязательные новые fact_ids из дополнительных источников: "
+                + json.dumps(required_new_fact_ids)
+            )
+        if reader.get("announcement_only"):
+            request["messages"][0]["content"] += (
+                " Это разбор опубликованных правил компании: объясняй, что документ "
+                "предусматривает и что компания заявила. Не превращай эти источники "
+                "в независимую проверку реального исполнения или эффективности."
+            )
+        request["messages"][1]["content"] += "\nИсходная карточка:\n" + str(
+            reader.get("baseline_text") or ""
+        )
+        if reader.get("expanded_reference_text"):
+            request["messages"][0]["content"] += (
+                " Уже показанное «Подробнее» — основа сравнения: статья должна содержать "
+                "хотя бы один подтверждённый содержательный факт сверх него. Сохрани "
+                "связность полного поста, не выдавай пересказ уже показанного за новую информацию."
+            )
+            request["messages"][1]["content"] += "\nУже показанное «Подробнее»:\n" + str(
+                reader["expanded_reference_text"]
+            )
+        request["max_tokens"] = min(6500, max(1800, int(target * 0.8) + 1200))
+    return request
 
 
 def _deep_article_body_from_payload(payload: dict[str, Any]) -> str:
@@ -1505,6 +1981,66 @@ def repair_deep_article_metadata(
             break
     if len(anchors) >= 2:
         repaired = repaired.model_copy(update={"source_anchors": anchors})
+    # A composite fact may cite several pages while only one of its literal
+    # quotes supports the number in a linked phrase. Route that link to the
+    # supporting page; never infer numerical evidence from the whole fact.
+    numerical_anchors = []
+    for anchor in repaired.source_anchors:
+        numbers = extract_numeric_values(anchor.phrase)
+        fact = facts.get(anchor.fact_id)
+        if not numbers or fact is None:
+            numerical_anchors.append(anchor)
+            continue
+        quote_numbers: dict[int, set[str]] = {}
+        for quote in fact.evidence_quotes:
+            quote_numbers.setdefault(quote.document_id, set()).update(
+                extract_numeric_values(quote.quote)
+            )
+        if numbers.issubset(quote_numbers.get(anchor.document_id, set())):
+            numerical_anchors.append(anchor)
+            continue
+        supporting_documents = []
+        field_fact_ids = {
+            fact_id for text, fact_ids in body_rows if anchor.phrase in text for fact_id in fact_ids
+        }
+        for fact_id in field_fact_ids:
+            supporting_fact = facts.get(fact_id)
+            if supporting_fact is None:
+                continue
+            for document_id in supporting_fact.document_ids:
+                document = documents_by_id.get(document_id)
+                supported_numbers = extract_numeric_values(
+                    " ".join(
+                        quote.quote
+                        for quote in supporting_fact.evidence_quotes
+                        if quote.document_id == document_id
+                    )
+                )
+                if (
+                    document is None
+                    or not is_full_text_document(document)
+                    or not numbers.issubset(supported_numbers)
+                ):
+                    continue
+                source_class = _document_evidence_class(document)
+                role = (
+                    "primary"
+                    if source_class == "primary"
+                    else "independent"
+                    if _independent_class(source_class)
+                    else "context"
+                )
+                supporting_documents.append(
+                    (fact_id != anchor.fact_id, role_order[role], fact_id, document_id, role)
+                )
+        if supporting_documents:
+            _changed_fact, _rank, fact_id, document_id, role = min(supporting_documents)
+            anchor = anchor.model_copy(
+                update={"fact_id": fact_id, "document_id": document_id, "role": role}
+            )
+        # Retain an unsupported anchor so validation rejects it explicitly.
+        numerical_anchors.append(anchor)
+    repaired = repaired.model_copy(update={"source_anchors": numerical_anchors})
     return repaired.model_copy(update={"used_document_ids": used_document_ids})
 
 
@@ -1711,11 +2247,29 @@ def validate_deep_article(
     snapshot: DetailFactSnapshot,
     documents: list[dict[str, Any]],
     event: dict[str, Any] | None = None,
+    depth: NewsReaderDepth = "legacy",
+    reader_context: dict[str, Any] | None = None,
+    required_new_fact_ids: list[int] | None = None,
 ) -> list[str]:
     errors: list[str] = deep_article_prose_errors(draft)
+    if depth == "legacy" and len(draft.source_anchors) < 2:
+        errors.append("legacy detailed article requires two source anchors")
     facts = {fact.fact_id: fact for fact in snapshot.facts}
     documents_by_id = {int(document["id"]): document for document in documents}
     fields = _article_fields(draft)
+    if depth != "legacy":
+        if required_new_fact_ids is None:
+            required_new_fact_ids = list((reader_context or {}).get("new_fact_ids") or [])
+        substantive_fact_ids = {
+            fact_id
+            for label, _text, fact_ids in fields
+            if label == "lead" or label.startswith("sections[")
+            for fact_id in fact_ids
+        }
+        if not substantive_fact_ids.intersection(required_new_fact_ids or []):
+            errors.append(
+                "reader lead/body must include a new verified fact from additional sources"
+            )
     cited_fact_ids: set[int] = set()
     for label, text, fact_ids in fields:
         if RAW_URL_RE.search(text):
@@ -1793,6 +2347,18 @@ def validate_deep_article(
             continue
         if anchor.document_id not in fact.document_ids:
             errors.append(f"source_anchors[{index}] document is not evidence for its fact")
+        quote_numbers = extract_numeric_values(
+            " ".join(
+                quote.quote
+                for quote in fact.evidence_quotes
+                if quote.document_id == anchor.document_id
+            )
+        )
+        if not extract_numeric_values(anchor.phrase).issubset(quote_numbers):
+            errors.append(
+                f"source_anchors[{index}] phrase numbers are not supported by "
+                "evidence quotes for its document"
+            )
         document = documents_by_id.get(anchor.document_id)
         source_class = _document_evidence_class(document or {})
         role_matches = {
@@ -1815,9 +2381,12 @@ def validate_deep_article(
             errors.append(f"source_anchors[{index}] phrase field does not cite its fact")
 
     visible_length = len(detail_article_visible_text(draft))
-    if visible_length < DETAIL_ARTICLE_MIN_VISIBLE:
+    minimum = DETAIL_ARTICLE_MIN_VISIBLE
+    if depth != "legacy":
+        minimum = min(1000, max(240, reader_target_units(depth, reader_context or {}) // 3))
+    if visible_length < minimum:
         errors.append(f"detailed article is too thin: {visible_length} visible characters")
-    if visible_length > 4096:
+    if visible_length > (4096 if depth == "legacy" else 20000):
         errors.append(f"detailed article exceeds Telegram limit: {visible_length}")
     limitation_fact_ids = {fact.fact_id for fact in snapshot.facts if fact.kind == "limitation"}
     if limitation_fact_ids and not (limitation_fact_ids & cited_fact_ids):
@@ -1834,10 +2403,30 @@ def generate_deep_article(
     *,
     generator: OpenRouterDeepArticleGenerator | None = None,
     max_cost_usd: float | None = None,
+    depth: NewsReaderDepth = "legacy",
+    reader_context: dict[str, Any] | None = None,
+    required_new_fact_ids: list[int] | None = None,
 ) -> DeepArticleGeneration:
     event = repository.event_context(event_id)
     if event is None:
         raise ValueError(f"Unknown event_id: {event_id}")
+    if depth != "legacy":
+        if required_new_fact_ids is None:
+            required_new_fact_ids = list((reader_context or {}).get("new_fact_ids") or [])
+        event = _reader_event(event, depth, reader_context or {})
+        event = {
+            **event,
+            "_news_reader": {
+                "depth": depth,
+                "target_units": reader_target_units(depth, reader_context or {}),
+                "baseline_text": (reader_context or {}).get("baseline_text", ""),
+                "expanded_reference_text": (reader_context or {}).get(
+                    "expanded_reference_text", ""
+                ),
+                "announcement_only": bool(event.get("_reader_announcement_only")),
+                "required_new_fact_ids": required_new_fact_ids or [],
+            },
+        }
     generator = generator or OpenRouterDeepArticleGenerator(settings)
     attempt_errors: list[str] = []
     total_cost = 0.0
@@ -1909,6 +2498,9 @@ def generate_deep_article(
             snapshot=snapshot,
             documents=documents,
             event=event,
+            depth=depth,
+            reader_context=reader_context,
+            required_new_fact_ids=required_new_fact_ids,
         )
         repository.record_usage(
             "openrouter",
@@ -1947,11 +2539,14 @@ def detail_generation_key(
     event_id: int,
     documents: list[dict[str, Any]],
     *,
-    prompt_version: str = DETAIL_PROMPT_VERSION,
+    prompt_version: str | None = None,
+    depth: NewsReaderDepth = "legacy",
+    context_fingerprint: str | None = None,
+    reader_context: dict[str, Any] | None = None,
 ) -> str:
     material = {
         "event_id": event_id,
-        "prompt_version": prompt_version,
+        "prompt_version": prompt_version or detail_policy_versions(depth)[1],
         "documents": [
             {
                 "id": int(document["id"]),
@@ -1961,10 +2556,148 @@ def detail_generation_key(
             for document in documents
         ],
     }
+    if depth != "legacy":
+        material.update(depth=depth, context_fingerprint=context_fingerprint)
+    if depth == "article":
+        material["article_reference_fingerprint"] = article_reference_fingerprint(
+            reader_context or {"context_fingerprint": context_fingerprint}
+        )
     digest = hashlib.sha256(
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return f"detail:{event_id}:{digest[:24]}"
+
+
+def bounded_reader_fact_documents(
+    documents: list[dict[str, Any]], event: dict[str, Any]
+) -> list[dict]:
+    """Bound model excerpts while retaining complete source pages in SQLite."""
+    per_document = max(800, min(2000, 14000 // max(1, len(documents))))
+    terms = set(re.findall(r"[a-zа-яё0-9-]{4,}", str(event.get("headline") or "").casefold()))
+    result = []
+    for document in documents:
+        content = str(document.get("content_text") or "")
+        if len(content) <= per_document:
+            result.append(document)
+            continue
+        focus = event.get("_reader_policy_focus")
+        if focus and focus.get("focal_terms"):
+            lead = min(500, per_document // 4)
+            windows = [(0, lead)]
+            remaining = per_document - lead
+            heading = re.search(r"(?im)^#{1,6}[^\n]*(?:abus|cruel|model welfare)[^\n]*$", content)
+            if heading:
+                following = re.search(r"(?m)^#{1,6}\s", content[heading.end() :])
+                end = heading.end() + following.start() if following else len(content)
+                end = min(end, heading.start() + remaining)
+                windows.append((heading.start(), end))
+                remaining -= end - heading.start()
+            if remaining > 100:
+                anchor = content.casefold().find("takes effect")
+                if anchor < 0 and not heading:
+                    anchor = next(
+                        (
+                            content.casefold().find(term, lead)
+                            for term in focus["focal_terms"]
+                            if content.casefold().find(term, lead) >= 0
+                        ),
+                        -1,
+                    )
+                if anchor >= 0:
+                    start = max(lead, anchor - 80)
+                    windows.append((start, min(len(content), start + remaining)))
+            if len(windows) > 1:
+                excerpt = "\n\n[…]\n\n".join(content[start:end] for start, end in windows)
+                result.append({**document, "content_text": excerpt})
+                continue
+        lead = int(per_document * 0.55)
+        windows = [(0, lead)]
+        remaining = per_document - lead
+        position = next(
+            (
+                content.casefold().find(term, lead)
+                for term in sorted(terms)
+                if content.casefold().find(term, lead) >= 0
+            ),
+            -1,
+        )
+        start = max(lead, position - 150) if position >= 0 else max(lead, len(content) - remaining)
+        windows.append((start, min(len(content), start + remaining)))
+        excerpt = "\n\n[…]\n\n".join(content[start:end] for start, end in windows)
+        result.append({**document, "content_text": excerpt})
+    return result
+
+
+def focused_reader_fact_transport(transport, guard, reader_context, announcement_only):
+    guarded = guard.llm_transport(transport, "fact_snapshot")
+
+    def call(payload, api_key):
+        request = json.loads(json.dumps(payload))
+        request["messages"][0]["content"] += (
+            "\nИзвлекай факты строго о событии исходной карточки, не об одноимённых "
+            "или других продуктах той же компании. Найди существенную дополнительную "
+            "информацию, которой нет в краткой карточке; не дели старую мысль на повторы."
+        )
+        if announcement_only:
+            request["messages"][0]["content"] += (
+                " Событие — публикация или изменение правил компании (company_event). "
+                "Извлекай опубликованные условия, разрешения и ограничения, сохраняя "
+                "их авторство. Это не model_release: benchmark и pricing не требуются. "
+                "Не выдавай заявления первоисточника за независимо проверенную эффективность."
+            )
+        additional_ids = reader_context.get("additional_document_ids") or []
+        if additional_ids:
+            request["messages"][0]["content"] += (
+                " Хотя бы один содержательный новый факт должен иметь буквальную цитату "
+                "из реально дополнительного документа, а не только из исходного источника. "
+                "Если дополнительный материал не даёт новой информации, не выдумывай факт "
+                "и не приписывай старому факту чужой document_id: верни только подтверждённые "
+                "факты, последующая проверка остановит разбор без нового вызова писателя."
+            )
+            request["messages"][1]["content"] += (
+                "\nРеально дополнительные прочитанные document_ids: " + json.dumps(additional_ids)
+            )
+        request["messages"][1]["content"] += "\nИсходная карточка:\n" + str(
+            reader_context.get("baseline_text") or ""
+        )
+        if reader_context.get("expanded_reference_text"):
+            request["messages"][0]["content"] += (
+                " Пользователь уже прочитал «Подробнее». Найди хотя бы один существенный "
+                "факт из реально дополнительных документов, которого нет в этом разборе. "
+                "Если источники только повторяют уже показанное, не выдумывай новизну."
+            )
+            request["messages"][1]["content"] += "\nУже показанное «Подробнее»:\n" + str(
+                reader_context["expanded_reference_text"]
+            )
+        return guarded(request, api_key)
+
+    return call
+
+
+class BoundedReaderFactGenerator:
+    def __init__(self, generator):
+        self.generator = generator
+
+    def generate(self, *, event, documents, model):
+        return self.generator.generate(
+            event=event, documents=bounded_reader_fact_documents(documents, event), model=model
+        )
+
+
+def reader_new_fact_ids(snapshot, additional_ids, baseline_text):
+    baseline_tokens = set(re.findall(r"[a-zа-яё0-9-]{4,}", baseline_text.casefold()))
+    baseline_numbers = extract_numeric_values(baseline_text)
+    result = []
+    for fact in snapshot.facts:
+        if not set(fact.document_ids).intersection(additional_ids):
+            continue
+        tokens = set(re.findall(r"[a-zа-яё0-9-]{4,}", fact.text.casefold()))
+        if (
+            len(tokens - baseline_tokens) >= 2
+            or extract_numeric_values(fact.text) - baseline_numbers
+        ):
+            result.append(fact.fact_id)
+    return result
 
 
 def build_detail_article(
@@ -1977,13 +2710,75 @@ def build_detail_article(
     research_service: BoundedDetailResearchService | None = None,
     fact_generator: OpenRouterFactSheetGenerator | None = None,
     article_generator: OpenRouterDeepArticleGenerator | None = None,
+    depth: NewsReaderDepth = "legacy",
+    reader_context: dict[str, Any] | None = None,
 ) -> DetailArticleBuildResult:
     """Worker-facing vertical slice from an event to a rendered, grounded article."""
 
+    reader_context = reader_context or {}
+    schema_version, prompt_version = detail_policy_versions(depth)
+    max_cost = detail_max_cost(settings, depth)
+    context_fingerprint = str(reader_context.get("context_fingerprint") or "")
+    fact_prompt_context = dict(reader_context)
+    if depth != "legacy":
+        reader_target_units(depth, reader_context)
+        guard = DurableDetailProvider(
+            settings,
+            repository,
+            event_id,
+            depth,
+            context_fingerprint,
+            request_budget_usd=max_cost,
+            retry_rejected=bool(reader_context.get("retry_rejected")),
+            retry_authorization=reader_context.get("retry_authorization"),
+        )
+        repository = guard.accounting_repository()
+        if research_service is None or isinstance(research_service, BoundedDetailResearchService):
+            original_client = (
+                research_service.client if research_service else MonidWebResearchClient(settings)
+            )
+            research_service = BoundedDetailResearchService(
+                settings,
+                repository,
+                client=guard.web_client(original_client),
+                planner=research_service.planner if research_service else None,
+            )
+        if fact_generator is None or isinstance(fact_generator, OpenRouterFactSheetGenerator):
+            event = repository.event_context(event_id) or {}
+            fact_generator = OpenRouterFactSheetGenerator(
+                settings,
+                transport=focused_reader_fact_transport(
+                    fact_generator.transport if fact_generator else http_transport,
+                    guard,
+                    fact_prompt_context,
+                    reader_announcement_scope(event, reader_context),
+                ),
+            )
+        fact_generator = BoundedReaderFactGenerator(fact_generator)
+        if article_generator is None or isinstance(
+            article_generator, OpenRouterDeepArticleGenerator
+        ):
+            article_generator = OpenRouterDeepArticleGenerator(
+                settings,
+                transport=guard.llm_transport(
+                    article_generator.transport if article_generator else http_transport, "article"
+                ),
+            )
     service = research_service or BoundedDetailResearchService(settings, repository)
-    collection = service.collect(event_id, progress=progress)
-    max_cost = float(_detail_limit(settings, "details_max_cost_usd", DETAIL_MAX_COST_USD))
+    try:
+        collection = service.collect(
+            event_id,
+            progress=progress,
+            **({"depth": depth, "reader_context": reader_context} if depth != "legacy" else {}),
+        )
+    except DetailProviderError as exc:
+        if depth != "legacy":
+            exc.cost_usd = guard.total_cost_usd
+        raise
     total_cost = collection.cost_usd
+    fact_prompt_context["additional_document_ids"] = list(
+        getattr(collection, "additional_document_ids", ())
+    )
     if total_cost >= max_cost:
         raise DetailBudgetError(
             "Per-request detail budget exhausted during retrieval", cost_usd=total_cost
@@ -1999,11 +2794,32 @@ def build_detail_article(
             collection.documents,
             generator=fact_generator,
             max_cost_usd=max_cost - total_cost,
+            **({"depth": depth, "reader_context": reader_context} if depth != "legacy" else {}),
         )
+    except DetailProviderError as exc:
+        if depth != "legacy":
+            exc.cost_usd = guard.total_cost_usd
+        raise
     except (DetailBudgetError, DetailGenerationError, DetailEvidenceError) as exc:
         exc.cost_usd += total_cost
         raise
     total_cost += fact_result.cost_usd
+    additional_ids = list(getattr(collection, "additional_document_ids", ()))
+    new_fact_ids = []
+    if depth != "legacy":
+        new_fact_ids = reader_new_fact_ids(
+            fact_result.snapshot,
+            set(additional_ids),
+            reader_reference_text(depth, reader_context),
+        )
+        if not new_fact_ids:
+            raise DetailEvidenceError(
+                [
+                    "Additional read sources supplied no new verified information "
+                    "beyond the previously shown reader result"
+                ],
+                cost_usd=total_cost,
+            )
     if total_cost >= max_cost:
         raise DetailBudgetError(
             "Per-request detail budget exhausted after fact extraction", cost_usd=total_cost
@@ -2020,23 +2836,51 @@ def build_detail_article(
             collection.documents,
             generator=article_generator,
             max_cost_usd=max_cost - total_cost,
+            **(
+                {
+                    "depth": depth,
+                    "reader_context": reader_context,
+                    "required_new_fact_ids": new_fact_ids,
+                }
+                if depth != "legacy"
+                else {}
+            ),
         )
+    except DetailProviderError as exc:
+        if depth != "legacy":
+            exc.cost_usd = guard.total_cost_usd
+        raise
     except (DetailBudgetError, DetailGenerationError, DetailEvidenceError) as exc:
         exc.cost_usd += total_cost
         raise
     total_cost += article_result.cost_usd
+    if depth != "legacy" and hasattr(guard, "total_cost_usd"):
+        total_cost = guard.total_cost_usd
     if total_cost > max_cost:
         raise DetailBudgetError(
             "Detailed article exceeded the per-request hard cap", cost_usd=total_cost
         )
 
-    rendered_html = render_detail_article_html(article_result.draft, collection.documents)
+    rendered_html = render_detail_article_html(
+        article_result.draft,
+        collection.documents,
+        **({"prose": True, "visible_limit": None} if depth != "legacy" else {}),
+    )
     source_urls = source_urls_for_draft(article_result.draft, collection.documents)
-    if len(source_urls) < 2:
+    event = repository.event_context(event_id) if depth != "legacy" else None
+    announcement_only = bool(event and reader_announcement_scope(event, reader_context))
+    if len(source_urls) < (1 if announcement_only else 2):
         raise DetailEvidenceError(
             ["rendered article has fewer than two source URLs"], cost_usd=total_cost
         )
-    key = generation_key or detail_generation_key(event_id, collection.documents)
+    key = generation_key or detail_generation_key(
+        event_id,
+        collection.documents,
+        prompt_version=prompt_version,
+        depth=depth,
+        context_fingerprint=context_fingerprint,
+        reader_context=reader_context,
+    )
     expires_at = (
         datetime.now(UTC)
         + timedelta(days=int(_detail_limit(settings, "details_cache_days", DETAIL_CACHE_DAYS)))
@@ -2044,12 +2888,37 @@ def build_detail_article(
     return DetailArticleBuildResult(
         event_id=event_id,
         generation_key=key,
+        schema_version=schema_version,
+        prompt_version=prompt_version,
         model=article_result.provider.model,
+        depth=depth,
+        reader_context=reader_context,
         provider_response_metadata={
             "fact_snapshot": fact_result.provider.model_dump(),
             "article": article_result.provider.model_dump(),
             "search_count": collection.search_count,
             "scrape_count": collection.scrape_count,
+            **(
+                {
+                    "additional_document_ids": additional_ids,
+                    "target_additional_sources": collection.target_additional_sources,
+                    "actual_additional_sources": len(additional_ids),
+                    "source_target_met": len(additional_ids)
+                    >= collection.target_additional_sources,
+                    "new_fact_ids": new_fact_ids,
+                    "target_visible_units": reader_target_units(depth, reader_context),
+                    "actual_visible_units": telegram_html_visible_units(rendered_html),
+                    "evidence_scope": "primary_announcement"
+                    if announcement_only
+                    else "corroborated",
+                    "cumulative_scope_cost_usd": total_cost,
+                    "incremental_attempt_cost_usd": getattr(
+                        guard, "incremental_cost_usd", total_cost
+                    ),
+                }
+                if depth != "legacy"
+                else {}
+            ),
         },
         research_plan=collection.plan.model_dump(),
         fact_snapshot=fact_result.snapshot.model_dump(mode="json"),

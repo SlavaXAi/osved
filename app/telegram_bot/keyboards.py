@@ -81,6 +81,10 @@ def _add_details_button(
             text="Подробнее",
             callback_data=NewsDepthCallback(delivery_id=delivery_id, expanded=True),
         )
+        builder.button(
+            text="Статья",
+            callback_data=DetailsCallback(delivery_id=delivery_id),
+        )
         return
     builder.button(
         text=DETAILS_LABELS[state],
@@ -114,7 +118,7 @@ def reaction_keyboard(
         )
     if include_details:
         _add_details_button(builder, delivery_id, details_state, expanded=expanded)
-        builder.adjust(4, 2 if expanded else 1)
+        builder.adjust(4, 2)
     else:
         builder.adjust(4)
     return builder.as_markup()
@@ -151,7 +155,7 @@ def superreaction_keyboard(
     )
     if include_details:
         _add_details_button(builder, delivery_id, details_state, expanded=expanded)
-        builder.adjust(1, 1, 1, 2 if expanded else 1)
+        builder.adjust(1, 1, 1, 2)
     else:
         builder.adjust(1, 1, 1)
     return builder.as_markup()
@@ -168,7 +172,7 @@ def detail_feedback_keyboard(
     builder = InlineKeyboardBuilder()
     for action, label in (
         (DetailFeedbackAction.USEFUL, "👍 Полезно"),
-        (DetailFeedbackAction.NOT_WORTH_IT, "👎 Не окупилось"),
+        (DetailFeedbackAction.NOT_WORTH_IT, "👎 Не полезно"),
     ):
         if current == action:
             label = f"✅ {label}"

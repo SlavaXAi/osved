@@ -257,6 +257,12 @@ class Settings(BaseSettings):
     openrouter_fallback_model: str | None = "openai/gpt-4.1-mini"
     openrouter_search_model: str = "openai/gpt-5.6-luna"
     monid_api_key: SecretStr | None = None
+    youtube_rss_fallback_enabled: bool = False
+
+    # Legacy setting is accepted for compatibility; selection uses relevance, not time.
+    youtube_less_interval_hours: int = Field(default=0, ge=0, le=168)
+    concept_briefs_enabled: bool = True
+    concept_briefs_max_cost_usd: float = Field(default=0.02, ge=0, le=0.05)
 
     # Explicit owner requests: no count cap; monetary caps are optional.
     video_reports_enabled: bool = True
@@ -273,6 +279,12 @@ class Settings(BaseSettings):
     details_cache_days: int = Field(default=7, ge=1, le=90)
     details_worker_concurrency: int = Field(default=1, ge=1, le=4)
     details_worker_lease_minutes: int = Field(default=10, ge=1, le=60)
+
+    news_reader_max_searches: int = Field(default=2, ge=0, le=5)
+    news_reader_expanded_max_scrapes: int = Field(default=6, ge=0, le=10)
+    news_reader_article_max_scrapes: int = Field(default=8, ge=0, le=12)
+    news_reader_expanded_max_cost_usd: float = Field(default=0.05, ge=0, le=1)
+    news_reader_article_max_cost_usd: float = Field(default=0.08, ge=0, le=1)
 
     budget_target_usd: float = Field(default=8.0, ge=0)
     budget_warning_usd: float = Field(default=9.0, ge=0)

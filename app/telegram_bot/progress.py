@@ -48,7 +48,7 @@ def progress_text(kind: str, stage: str, *, frame: int = 0, elapsed: float = 0) 
     title = html.escape(TITLES.get(kind, "Подготовка материала"))
     label = html.escape(STAGES.get(stage, "Обрабатываю запрос"))
     return (
-        f"<b>OSVED · {title}</b>\n\n"
+        f"<b>PARS · {title}</b>\n\n"
         f"<code>{FRAMES[frame % len(FRAMES)]}</code>\n{label}\n\n"
         f"<i>Прошло {clock}</i>"
     )
@@ -135,7 +135,7 @@ class DetailProgress:
 
         with repository.connection() as db:
             rows = db.execute(
-                "SELECT id,chat_id,placeholder_message_id,stage,requested_at "
+                "SELECT id,chat_id,placeholder_message_id,stage,requested_at,depth,delivery_id "
                 "FROM detail_requests WHERE status='running' "
                 "AND placeholder_message_id>0 ORDER BY id LIMIT 5"
             ).fetchall()
@@ -154,6 +154,18 @@ class DetailProgress:
                     stamp = stamp.replace(tzinfo=UTC)
                 elapsed = (datetime.now(UTC) - stamp).total_seconds()
                 frame = self.frames.get(key, 0)
+                if row["depth"] != "legacy":
+                    from app.telegram_bot.news_panel import update_loading
+
+                    await update_loading(
+                        bot,
+                        repository,
+                        row["delivery_id"],
+                        key,
+                        progress_text("details", row["stage"], frame=frame, elapsed=elapsed),
+                    )
+                    self.frames[key] = frame + 1
+                    break
                 await bot.edit_message_text(
                     chat_id=row["chat_id"],
                     message_id=row["placeholder_message_id"],

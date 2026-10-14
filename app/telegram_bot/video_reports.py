@@ -14,8 +14,6 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import BaseFilter
 from aiogram.types import (
     FSInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     LinkPreviewOptions,
     ReplyParameters,
 )
@@ -23,6 +21,21 @@ from aiogram.types import (
 from app.config import Settings
 from app.db.repository import Repository
 from app.telegram_bot.progress import ProgressPulse, progress_text
+from app.telegram_bot.video_panel import (
+    PanelProgressBot,
+    VideoPanelControl,
+    VideoResultControl,
+    bind_panel_job,
+    edit_panel,
+    ensure_panel,
+    get_panel,
+    panel_busy,
+    panel_keyboard,
+    register_result_message,
+    result_keyboard,
+    show_cached_summary,
+    summary_html,
+)
 from app.video.reports import ReportError, VideoReportService
 from app.video.transcripts import youtube_video_id
 
@@ -94,6 +107,7 @@ def enqueue(
     message_id: int,
     *,
     output_kind: str = "pdf",
+    panel_id: int | None = None,
 ) -> dict:
     if output_kind not in {"pdf", "tldr"}:
         raise ValueError("Unknown video output kind")
@@ -101,6 +115,15 @@ def enqueue(
     now = time.time()
     with repository.connection() as db:
         db.execute("BEGIN IMMEDIATE")
+        if panel_id is not None:
+            panel = db.execute("SELECT * FROM video_panels WHERE id=?", (panel_id,)).fetchone()
+            if (
+                not panel
+                or panel["video_id"] != video
+                or panel["chat_id"] != chat_id
+                or user_id != chat_id
+            ):
+                raise PermissionError("Foreign video panel")
         old = db.execute(
             "SELECT * FROM video_pdf_jobs WHERE chat_id=? AND request_message_id=? "
             "AND output_kind=?",
@@ -119,35 +142,56 @@ def enqueue(
         # Owner-requested reports have no queue quota; the worker processes them serially.
         row = db.execute(
             "INSERT INTO video_pdf_jobs"
-            "(video_id,user_id,chat_id,request_message_id,output_kind,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (video, user_id, chat_id, message_id, output_kind, now, now),
+            "(video_id,user_id,chat_id,request_message_id,output_kind,created_at,"
+            "updated_at,panel_id) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (video, user_id, chat_id, message_id, output_kind, now, now, panel_id),
         )
         return {"id": row.lastrowid, "status": "queued", "existing": False}
 
 
 async def ensure_video_progress(bot, repository: Repository, job_id: int) -> int | None:
-    """One status per job, shared by the button handler and the worker.
-
-    The local lock closes their normal race; the durable -1 claim prevents an
-    ambiguous send from being replayed after restart. Cosmetic failure must not
-    fail a report or trigger a new paid request.
-    """
+    """Claim an anchor once; bound requests update their original card in place."""
     key = (str(repository.database_path), job_id)
     lock = _progress_locks.setdefault(key, asyncio.Lock())
     async with lock:
         with repository.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM video_pdf_jobs WHERE id=?", (job_id,)).fetchone()
-            if not row:
+            if row is None:
                 return None
             job = dict(row)
-            known = job["status_message_id"]
-            if isinstance(known, int) and known > 0:
-                return known
-            if known == -1 or job["status"] not in {"queued", "running"}:
-                return None
-            db.execute("UPDATE video_pdf_jobs SET status_message_id=-1 WHERE id=?", (job_id,))
+            panel_row = db.execute(
+                "SELECT * FROM video_panels WHERE id=?", (job.get("panel_id"),)
+            ).fetchone()
+            panel = dict(panel_row) if panel_row else None
+            if panel:
+                if panel["chat_id"] != job["chat_id"] or panel["video_id"] != job["video_id"]:
+                    return None
+                known = panel["message_id"]
+                db.execute(
+                    "UPDATE video_pdf_jobs SET status_message_id=? WHERE id=?", (known, job_id)
+                )
+            else:
+                known = job["status_message_id"]
+                if isinstance(known, int) and known > 0:
+                    return known
+                if known == -1 or job["status"] not in {"queued", "running"}:
+                    return None
+                db.execute("UPDATE video_pdf_jobs SET status_message_id=-1 WHERE id=?", (job_id,))
+        if panel:
+            try:
+                await bot.edit_message_text(
+                    chat_id=job["chat_id"],
+                    message_id=known,
+                    text=progress_text(job["output_kind"], "queued"),
+                    parse_mode="HTML",
+                    reply_markup=panel_keyboard(repository, panel),
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+            except Exception:
+                logger.warning("Panel progress unavailable for job %s", job_id)
+            return known
         try:
             message = await bot.send_message(
                 chat_id=job["chat_id"],
@@ -163,20 +207,175 @@ async def ensure_video_progress(bot, repository: Repository, job_id: int) -> int
             )
             if not isinstance(message.message_id, int) or message.message_id <= 0:
                 return None
+            panel = ensure_panel(
+                repository,
+                chat_id=job["chat_id"],
+                message_id=message.message_id,
+                video_id=job["video_id"],
+                original_html=(
+                    '<b>Видео</b>\n\n<a href="https://www.youtube.com/watch?v='
+                    + job["video_id"]
+                    + '">Смотреть видео</a>'
+                ),
+            )
+            bind_panel_job(repository, panel["id"], job_id)
             with repository.connection() as db:
                 db.execute(
                     "UPDATE video_pdf_jobs SET status_message_id=? WHERE id=? "
                     "AND status_message_id=-1",
                     (message.message_id, job_id),
                 )
+            with suppress(Exception):
+                await bot.edit_message_reply_markup(
+                    chat_id=job["chat_id"],
+                    message_id=message.message_id,
+                    reply_markup=panel_keyboard(repository, get_panel(repository, panel["id"])),
+                )
             return message.message_id
         except Exception:
-            logger.warning("Progress message not confirmed for video job %s", job_id)
+            logger.warning("Progress anchor not confirmed for job %s", job_id)
             return None
+
+
+async def request_panel_output(callback, settings, repository, panel, output_kind):
+    if not settings.video_reports_enabled:
+        await callback.answer("Отчёты сейчас выключены", show_alert=True)
+        return
+    if panel_busy(repository, panel):
+        await callback.answer("Уже готовлю результат; меню останется здесь")
+        return
+    service = VideoReportService(settings, repository)
+    result = enqueue(
+        settings,
+        repository,
+        service,
+        panel["video_id"],
+        callback.from_user.id,
+        panel["chat_id"],
+        panel["message_id"],
+        output_kind=output_kind,
+        panel_id=panel["id"],
+    )
+    with repository.connection() as db:
+        job = dict(
+            db.execute("SELECT * FROM video_pdf_jobs WHERE id=?", (result["id"],)).fetchone()
+        )
+    if job["status"] == "sent" or (output_kind == "tldr" and job["error"] == "delivery_uncertain"):
+        if output_kind == "pdf":
+            await callback.answer("PDF уже отправлен в этот чат", show_alert=True)
+            return
+        await callback.answer("Открываю сохранённую сводку")
+        shown = await show_cached_summary(callback.bot, settings, repository, service, job, panel)
+        if not shown:
+            await edit_panel(
+                callback.bot,
+                repository,
+                panel,
+                panel["original_html"]
+                + "\n\nСохранённая сводка недоступна. Повторную оплату автоматически не запускаю.",
+                view="card",
+            )
+        return
+    if job["status"] in {"failed", "uncertain"}:
+        await callback.answer(ERRORS.get(job["error"], ERRORS["failed"]), show_alert=True)
+        return
+    if not bind_panel_job(repository, panel["id"], job["id"]):
+        await callback.answer("Этот выпуск уже готовится; открой сводку чуть позже")
+        return
+    await callback.answer("Готовлю сводку здесь" if output_kind == "tldr" else "Готовлю PDF")
+    await ensure_video_progress(callback.bot, repository, job["id"])
 
 
 def register_video_report_handlers(router, settings: Settings, repository: Repository) -> None:
     from app.telegram_bot.bot import is_allowed
+
+    @router.callback_query(VideoPanelControl.filter())
+    async def video_panel_handler(callback, callback_data: VideoPanelControl):
+        panel = get_panel(repository, callback_data.panel_id)
+        if (
+            not is_allowed(settings, repository, callback.from_user.id)
+            or not panel
+            or panel["chat_id"] != callback.from_user.id
+            or not callback.message
+            or callback.message.chat.id != panel["chat_id"]
+            or callback.message.message_id != panel["message_id"]
+        ):
+            await callback.answer("Карточка недоступна", show_alert=True)
+            return
+        action = callback_data.action
+        if panel_busy(repository, panel):
+            await callback.answer("Уже готовлю результат; меню останется здесь")
+            return
+        if action == "card":
+            await callback.answer()
+            await edit_panel(callback.bot, repository, panel, panel["original_html"], view="card")
+            return
+        if action == "dismiss" and panel.get("recommendation_id"):
+            with repository.connection() as db:
+                db.execute(
+                    "INSERT INTO video_feedback_events(recommendation_id,action,created_at) "
+                    "VALUES(?,'dismiss',datetime('now'))",
+                    (panel["recommendation_id"],),
+                )
+            await callback.answer("Отметка о выборе видео сохранена")
+            return
+        if action not in ("short", "pdf"):
+            await callback.answer()
+            return
+        await request_panel_output(
+            callback, settings, repository, panel, "tldr" if action == "short" else "pdf"
+        )
+
+    @router.callback_query(VideoResultControl.filter())
+    async def video_result_feedback_handler(callback, callback_data: VideoResultControl):
+        from app.video.result_feedback import save_result_feedback
+
+        if not is_allowed(settings, repository, callback.from_user.id) or not callback.message:
+            await callback.answer("Недоступно", show_alert=True)
+            return
+        with repository.connection() as db:
+            row = db.execute(
+                "SELECT * FROM video_pdf_jobs WHERE id=?", (callback_data.job_id,)
+            ).fetchone()
+        if row is None or callback.message.chat.id != callback.from_user.id:
+            await callback.answer("Результат недоступен")
+            return
+        job = dict(row)
+        with repository.connection() as db:
+            origin = db.execute(
+                "SELECT * FROM video_panels WHERE chat_id=? AND message_id=?",
+                (callback.from_user.id, callback.message.message_id),
+            ).fetchone()
+        panel = dict(origin) if origin else None
+        if (
+            job["output_kind"] == "tldr"
+            and panel
+            and callback.message.message_id == panel["message_id"]
+            and (panel["view"] != "summary" or panel["summary_job_id"] != job["id"])
+        ):
+            await callback.answer("Открой сводку, чтобы оценить её")
+            return
+        try:
+            save_result_feedback(
+                repository,
+                job_id=job["id"],
+                chat_id=callback.message.chat.id,
+                user_id=callback.from_user.id,
+                reaction=callback_data.reaction,
+                message_id=callback.message.message_id,
+            )
+        except (PermissionError, ValueError):
+            await callback.answer("Результат недоступен")
+            return
+        await callback.answer("Полезность результата сохранена")
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=result_keyboard(
+                    repository, job, message_id=callback.message.message_id
+                )
+            )
+        except Exception:
+            logger.warning("Feedback persisted, keyboard update failed for job %s", job["id"])
 
     @router.callback_query(F.data.startswith("vreport:long:"))
     async def video_long_report_handler(callback):
@@ -190,12 +389,17 @@ def register_video_report_handlers(router, settings: Settings, repository: Repos
                 "SELECT * FROM video_pdf_jobs WHERE id=? AND user_id=? AND output_kind='tldr'",
                 (job_id, callback.from_user.id),
             ).fetchone()
+            alias = db.execute(
+                "SELECT 1 FROM video_result_messages WHERE job_id=? AND chat_id=? "
+                "AND message_id=? AND output_kind='tldr'",
+                (job_id, callback.from_user.id, message.message_id if message else None),
+            ).fetchone()
         if (
             row is None
             or message is None
             or message.chat.type != "private"
             or message.chat.id != row["chat_id"]
-            or message.message_id != row["text_message_id"]
+            or (message.message_id != row["text_message_id"] and not alias)
             or row["status"] != "sent"
         ):
             await callback.answer("Отчёт недоступен")
@@ -212,6 +416,7 @@ def register_video_report_handlers(router, settings: Settings, repository: Repos
             row["chat_id"],
             row["request_message_id"],
             output_kind="pdf",
+            panel_id=row["panel_id"],
         )
         if result.get("existing"):
             if result["status"] == "sent":
@@ -223,6 +428,8 @@ def register_video_report_handlers(router, settings: Settings, repository: Repos
             else:
                 await callback.answer("Длинный отчёт уже в очереди")
         else:
+            if row["panel_id"]:
+                bind_panel_job(repository, row["panel_id"], result["id"])
             await callback.answer("Готовлю длинный отчёт · PDF")
             await ensure_video_progress(callback.bot, repository, result["id"])
 
@@ -300,10 +507,18 @@ class VideoReportWorker:
         ):
             self._finish(job, "failed", "disabled")
             return True
-        job["status_message_id"] = await ensure_video_progress(self.bot, self.repository, job["id"])
+        anchor_id = await ensure_video_progress(self.bot, self.repository, job["id"])
+        with self.repository.connection() as db:
+            job = dict(
+                db.execute("SELECT * FROM video_pdf_jobs WHERE id=?", (job["id"],)).fetchone()
+            )
+        job["status_message_id"] = anchor_id
+        progress_bot = (
+            PanelProgressBot(self.bot, self.repository, job) if job.get("panel_id") else self.bot
+        )
         try:
             async with ProgressPulse(
-                self.bot,
+                progress_bot,
                 chat_id=job["chat_id"],
                 message_id=lambda: job["status_message_id"],
                 kind=job["output_kind"],
@@ -342,31 +557,34 @@ class VideoReportWorker:
             return True
         self._finish(job, "sending")
         try:
+            panel = get_panel(self.repository, job.get("panel_id")) if job.get("panel_id") else None
+            reply_id = panel["message_id"] if panel else job["request_message_id"]
             reply = (
-                ReplyParameters(
-                    message_id=job["request_message_id"], allow_sending_without_reply=True
-                )
-                if job["request_message_id"] > 0
+                ReplyParameters(message_id=reply_id, allow_sending_without_reply=True)
+                if reply_id > 0
                 else None
             )
             if job["output_kind"] == "tldr":
-                from app.video.tldr import telegram_tldr
-
-                markup = InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="Длинный отчёт · PDF",
-                                callback_data=f"vreport:long:{job['id']}",
-                            )
-                        ]
-                    ]
+                panel = (
+                    get_panel(self.repository, job.get("panel_id")) if job.get("panel_id") else None
                 )
-                if job["status_message_id"]:
+                rendered = summary_html(self.settings, self.repository, job["video_id"], result)
+                if panel:
+                    await edit_panel(
+                        self.bot,
+                        self.repository,
+                        panel,
+                        rendered,
+                        view="summary",
+                        summary_job_id=job["id"],
+                    )
+                    delivered_message_id = panel["message_id"]
+                elif job["status_message_id"]:
+                    markup = result_keyboard(self.repository, job)
                     await self.bot.edit_message_text(
                         chat_id=job["chat_id"],
                         message_id=job["status_message_id"],
-                        text=telegram_tldr(result),
+                        text=rendered,
                         reply_markup=markup,
                         parse_mode="HTML",
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
@@ -375,8 +593,8 @@ class VideoReportWorker:
                 else:
                     response = await self.bot.send_message(
                         chat_id=job["chat_id"],
-                        text=telegram_tldr(result),
-                        reply_markup=markup,
+                        text=rendered,
+                        reply_markup=result_keyboard(self.repository, job),
                         parse_mode="HTML",
                         link_preview_options=LinkPreviewOptions(is_disabled=True),
                         reply_parameters=reply,
@@ -384,7 +602,7 @@ class VideoReportWorker:
                     delivered_message_id = response.message_id
             else:
                 async with ProgressPulse(
-                    self.bot,
+                    progress_bot,
                     chat_id=job["chat_id"],
                     message_id=lambda: job["status_message_id"],
                     kind="pdf",
@@ -393,8 +611,9 @@ class VideoReportWorker:
                     pulse.set_stage("delivery")
                     response = await self.bot.send_document(
                         chat_id=job["chat_id"],
-                        document=FSInputFile(result, filename=f"OSVED-{job['video_id']}.pdf"),
+                        document=FSInputFile(result, filename=f"PARS-{job['video_id']}.pdf"),
                         reply_parameters=reply,
+                        reply_markup=result_keyboard(self.repository, job),
                     )
                 delivered_message_id = response.message_id
         except Exception:
@@ -411,11 +630,33 @@ class VideoReportWorker:
                 f"UPDATE video_pdf_jobs SET status='sent',{field}=?,updated_at=? WHERE id=?",
                 (delivered_message_id, time.time(), job["id"]),
             )
+        register_result_message(
+            self.repository, job, delivered_message_id, panel_id=job.get("panel_id")
+        )
+        if job["output_kind"] == "pdf" and job.get("panel_id"):
+            panel = get_panel(self.repository, job["panel_id"])
+            with suppress(Exception):
+                if panel.get("summary_job_id"):
+                    with self.repository.connection() as db:
+                        saved = dict(
+                            db.execute(
+                                "SELECT * FROM video_pdf_jobs WHERE id=?",
+                                (panel["summary_job_id"],),
+                            ).fetchone()
+                        )
+                    await show_cached_summary(
+                        self.bot, self.settings, self.repository, self.service, saved, panel
+                    )
+                else:
+                    await edit_panel(
+                        self.bot, self.repository, panel, panel["original_html"], view="card"
+                    )
         # Delivery is already recorded. Cosmetic cleanup must never resend the PDF.
         if (
             job["output_kind"] == "pdf"
             and isinstance(job["status_message_id"], int)
             and job["status_message_id"] > 0
+            and not job.get("panel_id")
         ):
             try:
                 await self.bot.delete_message(
@@ -435,6 +676,17 @@ class VideoReportWorker:
 
     async def _notice(self, job, text):
         with suppress(Exception):
+            if job.get("panel_id"):
+                panel = get_panel(self.repository, job["panel_id"])
+                if panel:
+                    await edit_panel(
+                        self.bot,
+                        self.repository,
+                        panel,
+                        panel["original_html"] + "\n\n" + text,
+                        view="card",
+                    )
+                    return
             if isinstance(job["status_message_id"], int) and job["status_message_id"] > 0:
                 await self.bot.edit_message_text(
                     chat_id=job["chat_id"],
