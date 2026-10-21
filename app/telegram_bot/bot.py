@@ -1154,6 +1154,8 @@ async def send_pending_cards(
     sent = errors = 0
     try:
         for card in cards:
+            if not repository.card_source_is_available(card["card_id"]):
+                continue
             delivery_id = repository.ensure_delivery(card["card_id"], owner_id)
             if menu_reserved_delivery(repository, delivery_id):
                 continue
@@ -1201,6 +1203,8 @@ async def send_cards_by_ids(
     sent = errors = 0
     try:
         for card in cards:
+            if not repository.card_source_is_available(card["card_id"]):
+                continue
             delivery_id = repository.ensure_delivery(card["card_id"], owner_id)
             if menu_reserved_delivery(repository, delivery_id):
                 continue
@@ -1253,6 +1257,8 @@ async def send_candidate_batch(
     sent = errors = 0
     try:
         for card in cards:
+            if not repository.card_source_is_available(card["card_id"]):
+                continue
             delivery_id = int(card["delivery_id"])
             try:
                 message = await send_formatted_card(

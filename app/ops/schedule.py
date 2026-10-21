@@ -15,6 +15,7 @@ from app.collectors.orchestrator import collect_due_sources
 from app.config import DeliveryFormat, Settings, load_search_agent_registry
 from app.db.card_predicates import finished_card_sql
 from app.db.repository import Repository
+from app.db.source_availability import available_source_sql
 from app.ops.budget import SearchBudgetTransport
 from app.personalization.daily import load_context, record_selection
 from app.pipeline.cards import generate_cards
@@ -75,6 +76,7 @@ def fresh_research_events(
             JOIN source_items ON source_items.id = events.primary_source_item_id
             JOIN sources ON sources.id = source_items.source_id
             WHERE events.status = 'candidate'
+              AND {available_source_sql()}
               AND NOT EXISTS(SELECT 1 FROM menu_preparation_events m
                 WHERE m.event_id=events.id AND m.status IN('running','uncertain'))
               AND COALESCE(events.event_type, '') != 'system_test'
@@ -172,6 +174,7 @@ def fresh_delivery_card_ids(
             JOIN source_items ON source_items.id = events.primary_source_item_id
             JOIN sources ON sources.id = source_items.source_id
             WHERE {finished_card_sql()}
+              AND {available_source_sql()}
               AND events.status NOT IN ('merged', 'rejected')
               AND COALESCE(events.event_type, '') != 'system_test'
               AND CASE WHEN events.event_type='concept_brief'

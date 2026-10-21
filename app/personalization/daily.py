@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.radar.feedback import REACTION_WEIGHTS
 
-VERSION = "daily_editorial_v1"
+VERSION = "daily_editorial_v2"
 QUALITY = re.compile(
     r"структур|абзац|заголов|оформл|формулиров|повтор|однотип|вод[аыу]|поверхност|"
     r"реклам|нечитаб|не\s*ясн|не\s+пон[яи]ма|поинт|споинт|в\s+ч[её]м\s+смысл|"
@@ -236,8 +236,8 @@ class DailyContext:
             # Negative usefulness counts against a boost, but is not a topic ban.
             if positives < len(values) / 2 and label not in GENRES:
                 continue
-            mass = sum(w for _, w, _ in values)
-            shift = sum((1 if v > 0 else -1) * w for v, w, _ in values) / (mass + 3)
+            mass = sum(abs(v) * w for v, w, _ in values)
+            shift = sum(v * w for v, w, _ in values) / (mass + 3)
             learned[label] = {
                 "weight": round(0.6 * shift, 3),
                 "event_ids": [r["event_id"] for _, _, r in values],
@@ -276,10 +276,13 @@ class DailyContext:
             and any(self.policy.priorities.get(t, 0) > 0 for t in set(r["traits"]) & useful)
         }
         engagement = 0.15 if len(usage_ids) >= 3 else 0.0
-        total = max(
-            -self.policy.max_adjustment,
-            min(self.policy.max_adjustment, priority - penalties + feedback + engagement),
-        )
+        # Reserve space for learned preferences instead of letting fixed boosts
+        # consume the whole budget. The adaptive component remains bounded.
+        adaptive_cap = min(0.6, self.policy.max_adjustment * 0.3)
+        editorial_cap = self.policy.max_adjustment - adaptive_cap
+        editorial = max(-editorial_cap, min(editorial_cap, priority - penalties))
+        adaptive = max(-adaptive_cap, min(adaptive_cap, feedback + engagement))
+        total = editorial + adaptive
         return {
             "version": VERSION,
             "context": self.digest,
@@ -288,6 +291,9 @@ class DailyContext:
             "genre_penalty": round(-penalties, 3),
             "feedback": round(feedback, 3),
             "engagement": engagement,
+            "editorial": round(editorial, 3),
+            "adaptive": round(adaptive, 3),
+            "adaptive_cap": round(adaptive_cap, 3),
             "engagement_ids": sorted(usage_ids)[:20],
             "adjustment": round(total, 3),
             "feedback_ids": sorted(
@@ -329,8 +335,12 @@ def engagement_examples(repository, owner, *, now):
             "SELECT j.video_id,i.original_text FROM video_pdf_jobs j "
             "JOIN source_items i ON i.external_id=j.video_id JOIN sources s ON s.id=i.source_id "
             "WHERE j.chat_id=? AND j.user_id=? AND j.status='sent' AND s.kind='youtube' "
-            "AND julianday(j.updated_at)<=julianday(?) "
-            "AND julianday(j.created_at)>=julianday(?,'-60 days') "
+            "AND CASE WHEN typeof(j.updated_at) IN ('real','integer') "
+            "THEN julianday(j.updated_at,'unixepoch') ELSE julianday(j.updated_at) END "
+            "<=julianday(?) "
+            "AND CASE WHEN typeof(j.created_at) IN ('real','integer') "
+            "THEN julianday(j.created_at,'unixepoch') ELSE julianday(j.created_at) END "
+            ">=julianday(?,'-60 days') "
             "AND NOT EXISTS(SELECT 1 FROM video_result_feedback f JOIN video_pdf_jobs rated "
             "ON rated.id=f.job_id WHERE rated.video_id=j.video_id AND f.chat_id=? "
             "AND f.reaction='dislike' AND julianday(f.updated_at)<=julianday(?)) "

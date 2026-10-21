@@ -126,6 +126,8 @@ async def send_next_news(
             if not claimed:
                 return {**result, "status": "queue_lock_lost", "errors": 1, "sent": len(sent_ids)}
             lock_value = renewed
+            if not repository.card_source_is_available(card["card_id"]):
+                continue
             delivery_id = repository.ensure_delivery(card["card_id"], owner)
             from app.telegram_bot.bot import menu_reserved_delivery
 

@@ -12,6 +12,7 @@ from typing import Any
 
 from app.config import SourceRegistry
 from app.db.card_predicates import finished_card_sql
+from app.db.source_availability import available_source_sql
 from app.research.detail_policy import (
     DETAIL_PROMPT_VERSION,
     DETAIL_SCHEMA_VERSION,
@@ -2297,10 +2298,25 @@ class Repository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def card_source_is_available(self, card_id: int) -> bool:
+        with self.connection() as db:
+            return (
+                db.execute(
+                    f"""SELECT 1 FROM cards
+                JOIN events ON events.id=cards.event_id
+                JOIN source_items ON source_items.id=events.primary_source_item_id
+                JOIN sources ON sources.id=source_items.source_id
+                WHERE cards.id=? AND cards.validation_status='valid'
+                  AND {available_source_sql()}""",
+                    (card_id,),
+                ).fetchone()
+                is not None
+            )
+
     def deliverable_cards(self, chat_id: int, limit: int = 10) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     cards.id AS card_id,
                     cards.event_id,
@@ -2311,9 +2327,13 @@ class Repository:
                     deliveries.id AS delivery_id,
                     deliveries.delivery_status
                 FROM cards
+                JOIN events ON events.id=cards.event_id
+                JOIN source_items ON source_items.id=events.primary_source_item_id
+                JOIN sources ON sources.id=source_items.source_id
                 LEFT JOIN deliveries
                     ON deliveries.card_id = cards.id AND deliveries.chat_id = ?
                 WHERE cards.validation_status = 'valid'
+                  AND {available_source_sql()}
                   AND (deliveries.id IS NULL OR deliveries.delivery_status = 'failed')
                 ORDER BY cards.created_at, cards.id
                 LIMIT ?
@@ -2345,10 +2365,14 @@ class Repository:
                     deliveries.id AS delivery_id,
                     deliveries.delivery_status
                 FROM cards
+                JOIN events ON events.id=cards.event_id
+                JOIN source_items ON source_items.id=events.primary_source_item_id
+                JOIN sources ON sources.id=source_items.source_id
                 LEFT JOIN deliveries
                     ON deliveries.card_id = cards.id AND deliveries.chat_id = ?
                 WHERE cards.id IN ({placeholders})
                   AND cards.validation_status = 'valid'
+                  AND {available_source_sql()}
                   AND (deliveries.id IS NULL OR deliveries.delivery_status = 'failed')
                 """,
                 (chat_id, *ordered_ids),

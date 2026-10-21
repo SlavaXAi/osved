@@ -29,8 +29,8 @@ def test_healthcheck_missing_database_is_unhealthy_not_a_new_database(tmp_path, 
         None,
         "not-a-date",
         "2026-09-07T12:00:00",
-        (datetime.now(UTC) - timedelta(minutes=16)).isoformat(),
-        (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+        lambda: (datetime.now(UTC) - timedelta(minutes=16)).isoformat(),
+        lambda: (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
     ],
 )
 def test_healthcheck_rejects_absent_stale_invalid_or_future_heartbeat(
@@ -38,6 +38,9 @@ def test_healthcheck_rejects_absent_stale_invalid_or_future_heartbeat(
 ):
     _, repository = environment(tmp_path, monkeypatch)
     repository.migrate()
+    # Compute relative timestamps at execution, not collection: a full suite
+    # can run for longer than the future offset.
+    timestamp = timestamp() if callable(timestamp) else timestamp
     if timestamp is not None:
         repository.set_runtime_setting("service_last_tick", timestamp)
     assert healthcheck.check() is False

@@ -273,5 +273,5 @@ def test_trace_is_durable_idempotent_and_does_not_rewrite_scores(daily_env):
         rows = db.execute("SELECT * FROM daily_selection_runs").fetchall()
         assert len(rows) == 1
         payload = json.loads(rows[0]["payload_json"])
-        assert payload["rows"][0]["reason"]["version"] == "daily_editorial_v1"
+        assert payload["rows"][0]["reason"]["version"] == "daily_editorial_v2"
         assert db.execute("SELECT score FROM events WHERE id=?", (eid,)).fetchone()[0] == 10

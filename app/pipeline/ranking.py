@@ -162,6 +162,7 @@ def rank_event_candidates(
                 continue
             if not isfinite(base_score) or base_score < QUALITY_FLOOR:
                 continue
+            significance_score = base_score
             if personalization is not None:
                 preference = event["score_features"]["daily_personalization"]
                 # Fixed feeds sum priority, freshness and several source bonuses;
@@ -174,6 +175,7 @@ def rank_event_candidates(
                 )
                 preference["original_score"] = base_score
                 preference["calibrated_score"] = round(calibrated, 3)
+                significance_score = calibrated
                 base_score = calibrated + preference["adjustment"]
             organizations = event_organizations(event)
             topics = _list_value(event, "topics_json")
@@ -217,7 +219,7 @@ def rank_event_candidates(
                 )
             }
             # An exceptional event can survive concentrated source/topic coverage.
-            escape = 0.35 if base_score >= 9.0 else 1.0
+            escape = 0.35 if significance_score >= 9.0 else 1.0
             total_penalty = escape * (
                 organization_penalty
                 + topic_penalty
