@@ -243,6 +243,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     telegram_bot_token: SecretStr | None = None
+    telegram_api_base_url: str | None = None
+    media_downloads_enabled: bool = True
+    media_max_file_bytes: int = Field(default=1_900_000_000, ge=1_000_000, le=1_900_000_000)
+    media_max_storage_bytes: int = Field(default=4_500_000_000, ge=100_000_000)
+    media_min_free_bytes: int = Field(default=1_000_000_000, ge=100_000_000)
+    media_timeout_seconds: int = Field(default=1800, ge=30, le=7200)
     allowed_user_id: int | None = None
     telegram_api_id: int | None = None
     telegram_api_hash: SecretStr | None = None

@@ -465,6 +465,22 @@ def register_video_report_handlers(router, settings: Settings, repository: Repos
         if result.get("existing"):
             return
         await ensure_video_progress(message.bot, repository, result["id"])
+        if settings.media_downloads_enabled:
+            from app.telegram_bot.media_downloads import remember_youtube
+
+            remember_youtube(repository, message, result["id"])
+            with repository.connection() as db:
+                job = db.execute(
+                    "SELECT panel_id FROM video_pdf_jobs WHERE id=?", (result["id"],)
+                ).fetchone()
+            if job and job["panel_id"]:
+                panel = get_panel(repository, job["panel_id"])
+                with suppress(Exception):
+                    await message.bot.edit_message_reply_markup(
+                        chat_id=panel["chat_id"],
+                        message_id=panel["message_id"],
+                        reply_markup=panel_keyboard(repository, panel),
+                    )
 
 
 class VideoReportWorker:

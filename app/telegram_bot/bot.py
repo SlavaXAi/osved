@@ -256,12 +256,14 @@ def build_router(settings: Settings, repository: Repository) -> Router:
     router = Router(name="personal-newsfeed")
     from app.telegram_bot.channels import register_channel_handlers
     from app.telegram_bot.intelligence import register_intelligence_handlers
+    from app.telegram_bot.media_downloads import register_media_handlers
     from app.telegram_bot.sensory import register_sensory_handlers
     from app.telegram_bot.telegram_channels import register_telegram_channel_handlers
     from app.telegram_bot.video_notes import register_video_note_handlers
     from app.telegram_bot.video_reports import register_video_report_handlers
 
     register_video_note_handlers(router, settings, repository)
+    register_media_handlers(router, settings, repository)
     register_intelligence_handlers(router, settings, repository)
     register_sensory_handlers(router, settings, repository)
     register_telegram_channel_handlers(router, settings, repository)
@@ -658,7 +660,16 @@ def build_router(settings: Settings, repository: Repository) -> Router:
 def build_bot(settings: Settings) -> Bot:
     if settings.telegram_bot_token is None:
         raise TelegramBotNotConfigured("TELEGRAM_BOT_TOKEN is required")
+    from aiogram.client.session.aiohttp import AiohttpSession
+    from aiogram.client.telegram import TelegramAPIServer
+
+    session = None
+    if settings.telegram_api_base_url:
+        session = AiohttpSession(
+            api=TelegramAPIServer.from_base(settings.telegram_api_base_url, is_local=True)
+        )
     return Bot(
+        session=session,
         token=settings.telegram_bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
@@ -676,6 +687,7 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
                 BotCommand(command="sources", description="Включить или выключить источники"),
                 BotCommand(command="tgchannels", description="Мои Telegram-каналы для радара"),
                 BotCommand(command="videos", description="Рекомендации подкастов и видео"),
+                BotCommand(command="download", description="Скачать YouTube или X в Telegram"),
                 BotCommand(command="circle", description="Превратить видео в кружочек"),
                 BotCommand(
                     command="channels", description="Добавить YouTube-каналы и управлять ими"
@@ -693,6 +705,13 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     details_task: asyncio.Task[None] | None = None
     details_worker_task: asyncio.Task[None] | None = None
     details_worker_stop: asyncio.Event | None = None
+    media_task: asyncio.Task[None] | None = None
+    if settings.media_downloads_enabled:
+        from app.telegram_bot.media_downloads import MediaWorker
+
+        media_task = asyncio.create_task(
+            MediaWorker(bot, settings, repository).run_loop(), name="media-download-worker"
+        )
     video_report_task: asyncio.Task[None] | None = None
     if settings.video_reports_enabled:
         from app.telegram_bot.video_reports import VideoReportWorker
@@ -715,6 +734,10 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        if media_task is not None:
+            media_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await media_task
         if video_report_task is not None:
             video_report_task.cancel()
             with suppress(asyncio.CancelledError):

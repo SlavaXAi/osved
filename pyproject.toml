@@ -17,6 +17,7 @@ dependencies = [
   "Telethon>=1.44,<2",
   "typer>=0.16,<1",
   "reportlab>=4.4,<5",
+  "yt-dlp==2025.10.14",
 ]
 
 [project.optional-dependencies]

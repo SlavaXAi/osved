@@ -161,6 +161,9 @@ def panel_keyboard(repository, panel):
         )
     tail.adjust(1)
     builder.attach(tail)
+    from app.telegram_bot.media_downloads import add_download_button
+
+    add_download_button(repository, panel, builder)
     return builder.as_markup()
 
 
