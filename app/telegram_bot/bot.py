@@ -254,16 +254,20 @@ def set_delivery_format(repository: Repository, delivery_format: DeliveryFormat)
 
 def build_router(settings: Settings, repository: Repository) -> Router:
     router = Router(name="personal-newsfeed")
+    from app.telegram_bot.biography import register_biography_handlers
     from app.telegram_bot.channels import register_channel_handlers
     from app.telegram_bot.intelligence import register_intelligence_handlers
     from app.telegram_bot.media_downloads import register_media_handlers
+    from app.telegram_bot.menu_batches import register_batch_handlers
     from app.telegram_bot.sensory import register_sensory_handlers
     from app.telegram_bot.telegram_channels import register_telegram_channel_handlers
     from app.telegram_bot.video_notes import register_video_note_handlers
     from app.telegram_bot.video_reports import register_video_report_handlers
 
+    register_batch_handlers(router, settings, repository)
     register_video_note_handlers(router, settings, repository)
     register_media_handlers(router, settings, repository)
+    register_biography_handlers(router, settings, repository)
     register_intelligence_handlers(router, settings, repository)
     register_sensory_handlers(router, settings, repository)
     register_telegram_channel_handlers(router, settings, repository)
@@ -678,26 +682,33 @@ def build_bot(settings: Settings) -> Bot:
 async def run_bot(settings: Settings, repository: Repository) -> None:
     bot = build_bot(settings)
     try:
-        await bot.set_my_commands(
-            [
-                BotCommand(command="help", description="Как пользоваться PARS"),
-                BotCommand(command="bio", description="Ежедневные биографии: статус и пауза"),
-                BotCommand(command="news", description="Получить ещё свежие новости"),
-                BotCommand(command="radar", description="Состояние радара и расходы"),
-                BotCommand(command="sources", description="Включить или выключить источники"),
-                BotCommand(command="tgchannels", description="Мои Telegram-каналы для радара"),
-                BotCommand(command="videos", description="Рекомендации подкастов и видео"),
-                BotCommand(command="download", description="Скачать YouTube или X в Telegram"),
-                BotCommand(command="circle", description="Превратить видео в кружочек"),
-                BotCommand(
-                    command="channels", description="Добавить YouTube-каналы и управлять ими"
-                ),
-                BotCommand(command="report", description="PDF-резюме по ссылке YouTube"),
-                BotCommand(command="week", description="Недельная карта проверенных событий"),
-                BotCommand(command="people", description="Люди за неделю по сохранённым событиям"),
-                BotCommand(command="preferences", description="Предложения по моим реакциям"),
+        commands = [
+            BotCommand(command="help", description="Как пользоваться PARS"),
+            BotCommand(command="bio", description="Ежедневные биографии: статус и пауза"),
+            BotCommand(command="news", description="Получить ещё свежие новости"),
+            BotCommand(command="radar", description="Состояние радара и расходы"),
+            BotCommand(command="sources", description="Включить или выключить источники"),
+            BotCommand(command="tgchannels", description="Мои Telegram-каналы для радара"),
+            BotCommand(command="videos", description="Рекомендации подкастов и видео"),
+            BotCommand(command="download", description="Скачать YouTube или X в Telegram"),
+            BotCommand(command="circle", description="Превратить видео в кружочек"),
+            BotCommand(command="channels", description="Добавить YouTube-каналы и управлять ими"),
+            BotCommand(command="report", description="PDF-резюме по ссылке YouTube"),
+            BotCommand(command="week", description="Недельная карта проверенных событий"),
+            BotCommand(command="people", description="Люди за неделю по сохранённым событиям"),
+            BotCommand(command="preferences", description="Предложения по моим реакциям"),
+        ]
+        if settings.menu_batches_enabled:
+            from app.menu_batches.store import KINDS
+
+            commands = [
+                BotCommand(command=kind, description=title) for kind, (title, _, _) in KINDS.items()
+            ] + [
+                BotCommand(command="menu", description="Все выпуски: выбрать кнопкой"),
+                BotCommand(command="settings", description="Управление источниками и лентой"),
+                *[c for c in commands if c.command not in KINDS],
             ]
-        )
+        await bot.set_my_commands(commands)
     except Exception:
         logger.warning("Could not update Telegram command menu; polling will still start")
     dispatcher = Dispatcher()
@@ -706,6 +717,13 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     details_worker_task: asyncio.Task[None] | None = None
     details_worker_stop: asyncio.Event | None = None
     media_task: asyncio.Task[None] | None = None
+    batch_task: asyncio.Task[None] | None = None
+    if settings.menu_batches_enabled:
+        from app.telegram_bot.menu_batches import BatchWorker
+
+        batch_task = asyncio.create_task(
+            BatchWorker(bot, settings, repository).run_loop(), name="menu-batch-worker"
+        )
     if settings.media_downloads_enabled:
         from app.telegram_bot.media_downloads import MediaWorker
 
@@ -734,6 +752,10 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        if batch_task is not None:
+            batch_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await batch_task
         if media_task is not None:
             media_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -1100,6 +1122,22 @@ async def send_smoke_card(
         await bot.session.close()
 
 
+def menu_reserved_delivery(repository, delivery_id):
+    """An automatic sender must not steal a manually reserved outbox item."""
+    with repository.connection() as db:
+        row = db.execute("SELECT batch_id FROM deliveries WHERE id=?", (delivery_id,)).fetchone()
+        reserved = (
+            db.execute(
+                "SELECT 1 FROM menu_batch_items WHERE delivery_id=? "
+                "AND item_kind='news' AND status NOT IN('skipped','failed')",
+                (delivery_id,),
+            ).fetchone()
+            if row and str(row[0] or "").startswith("menu:")
+            else None
+        )
+    return bool(reserved)
+
+
 async def send_pending_cards(
     settings: Settings,
     repository: Repository,
@@ -1117,6 +1155,8 @@ async def send_pending_cards(
     try:
         for card in cards:
             delivery_id = repository.ensure_delivery(card["card_id"], owner_id)
+            if menu_reserved_delivery(repository, delivery_id):
+                continue
             try:
                 message = await send_formatted_card(
                     bot,
@@ -1162,6 +1202,8 @@ async def send_cards_by_ids(
     try:
         for card in cards:
             delivery_id = repository.ensure_delivery(card["card_id"], owner_id)
+            if menu_reserved_delivery(repository, delivery_id):
+                continue
             try:
                 message = await send_formatted_card(
                     bot,

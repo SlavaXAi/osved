@@ -4038,6 +4038,15 @@ class Repository:
 
     def claim_schedule_slot(self, job_type: str, slot_at: str, mode: str) -> int | None:
         with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if (
+                mode == "live"
+                and connection.execute(
+                    "SELECT 1 FROM menu_preparations WHERE status='running' LIMIT 1"
+                ).fetchone()
+            ):
+                # Leave the slot unclaimed: the schedule loop will retry within its grace window.
+                return None
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO schedule_slots(job_type, slot_at, mode, status)

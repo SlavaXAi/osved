@@ -216,7 +216,8 @@ def test_article_after_more_cannot_reuse_article_first_cache_or_attach_it(env):
         )
 
 
-def test_policy_delivery_preserves_expanded_v2_and_requires_article_v3(env):
+def test_policy_delivery_preserves_expanded_v2_and_requires_article_v3(env, monkeypatch):
+    monkeypatch.setattr("app.db.repository.utc_now", lambda: STAMP)
     repo, _, _ = env
     _, expanded_id = make_ready(env)
     _, article_id = make_ready(env, "article")

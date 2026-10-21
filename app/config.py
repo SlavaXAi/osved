@@ -245,6 +245,8 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_api_base_url: str | None = None
     media_downloads_enabled: bool = True
+    menu_batches_enabled: bool = False
+    menu_preparation_max_cost_usd: float = Field(default=0.05, gt=0, le=0.25)
     media_max_file_bytes: int = Field(default=1_900_000_000, ge=1_000_000, le=1_900_000_000)
     media_max_storage_bytes: int = Field(default=4_500_000_000, ge=100_000_000)
     media_min_free_bytes: int = Field(default=1_000_000_000, ge=100_000_000)
@@ -271,6 +273,11 @@ class Settings(BaseSettings):
     concept_briefs_max_cost_usd: float = Field(default=0.02, ge=0, le=0.05)
 
     # Explicit owner requests: no count cap; monetary caps are optional.
+    openrouter_biography_model: str = "qwen/qwen3.5-flash-02-23"
+    biography_enabled: bool = False
+    biography_reserve_size: int = Field(default=3, ge=1, le=3)
+    biography_max_cost_usd: float = Field(default=0.25, gt=0, le=0.25)
+    biography_max_daily_cycles: int = Field(default=3, ge=1, le=3)
     video_reports_enabled: bool = True
     video_report_budget_enabled: bool = False
     video_report_max_cost_usd: float = Field(default=0.50, ge=0, le=1)

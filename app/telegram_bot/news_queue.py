@@ -123,6 +123,10 @@ async def send_next_news(
                 return {**result, "status": "queue_lock_lost", "errors": 1, "sent": len(sent_ids)}
             lock_value = renewed
             delivery_id = repository.ensure_delivery(card["card_id"], owner)
+            from app.telegram_bot.bot import menu_reserved_delivery
+
+            if menu_reserved_delivery(repository, delivery_id):
+                continue
             # The frontier is the last card, not every card in the batch. Only
             # rating this frontier requests more. Old ratings remain feedback.
             repository.set_runtime_setting(f"news_queue_current:{owner}", str(delivery_id))
@@ -140,12 +144,20 @@ async def send_next_news(
             except Exception as exc:
                 repository.mark_delivery_error(delivery_id, redact_text(str(exc)))
                 return {
-                    **result, "status": "delivery_confirmation_needed", "errors": 1,
-                    "sent": len(sent_ids), "delivery_ids": sent_ids,
+                    **result,
+                    "status": "delivery_confirmation_needed",
+                    "errors": 1,
+                    "sent": len(sent_ids),
+                    "delivery_ids": sent_ids,
                 }
+        if not sent_ids:
+            return {**result, "status": "queue_empty"}
         return {
-            **result, "status": "sent", "sent": len(sent_ids),
-            "delivery_id": sent_ids[-1], "delivery_ids": sent_ids,
+            **result,
+            "status": "sent",
+            "sent": len(sent_ids),
+            "delivery_id": sent_ids[-1],
+            "delivery_ids": sent_ids,
         }
     finally:
         try:

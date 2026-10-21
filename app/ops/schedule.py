@@ -67,12 +67,15 @@ def fresh_research_events(
     with repository.connection() as connection:
         rows = connection.execute(
             f"""SELECT events.*, source_items.source_url, source_items.outbound_urls_json,
+                source_items.published_at AS source_published_at,
                 source_items.discovery_mode, source_items.original_text, sources.id AS source_id,
                 sources.kind AS source_kind, sources.admission_mode, sources.role AS source_role
             FROM events
             JOIN source_items ON source_items.id = events.primary_source_item_id
             JOIN sources ON sources.id = source_items.source_id
             WHERE events.status = 'candidate'
+              AND NOT EXISTS(SELECT 1 FROM menu_preparation_events m
+                WHERE m.event_id=events.id AND m.status IN('running','uncertain'))
               AND COALESCE(events.event_type, '') != 'system_test'
               AND {FRESH_EVENT_SQL}
               AND (sources.kind!='youtube' OR

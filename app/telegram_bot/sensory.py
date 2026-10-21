@@ -175,6 +175,7 @@ def video_description(
     *,
     relevance_profile: dict | None = None,
     assessment_id: int | None = None,
+    transport=None,
 ) -> str | dict | None:
     """Describe known metadata only; do not pretend to have watched the video."""
     source = html.escape(str(item["source_name"]))
@@ -236,6 +237,8 @@ def video_description(
             return None
         return f"<b>{source}</b>\n\nНовый выпуск. Описание отложено до обновления лимита расходов."
     usage_metadata = {"source_item_id": item["id"], "model": model, "reservation_usd": reserve}
+    if getattr(repository, "preparation_id", None) is not None:
+        usage_metadata["menu_preparation_id"] = repository.preparation_id
     usage_id = None
     if relevance_profile is not None:
         with repository.connection() as db:
@@ -281,12 +284,14 @@ def video_description(
             )
 
     try:
-        response = http_transport(request, settings.openrouter_api_key.get_secret_value())
-    except (OpenRouterRequestError, TimeoutError, OSError):
+        response = (transport or http_transport)(
+            request, settings.openrouter_api_key.get_secret_value()
+        )
+    except (OpenRouterRequestError, TimeoutError, OSError) as exc:
         # A timed-out provider request may have been billed. Do not auto-retry.
         record(
             "video.metadata_description.transport_error",
-            cost_usd=reserve,
+            cost_usd=0 if getattr(exc, "rejected_before_dispatch", False) else reserve,
             metadata={
                 **usage_metadata,
                 "cost_estimated": True,
@@ -469,7 +474,17 @@ def register_sensory_handlers(router, settings: Settings, repository: Repository
         ):
             return
         await message.answer(
-            "<b>PARS — персональная система осведомлённости</b>\n\n"
+            (
+                "<b>Выпуски по команде</b>\n\n"
+                "/news — сайты и блоги\n/telegram — Telegram-радар\n/twitter — X / Twitter\n"
+                "/youtube — YouTube\n/people — действия людей\n/institutions — организации\n"
+                "/bio — новая биография\n/menu — кнопки выпусков\n/settings — управление\n\n"
+                "Каждый материал приходит отдельно. Оценка не обязательна для следующего. "
+                "Подготовка новых материалов — отдельной кнопкой с бюджетом.\n\n"
+                if settings.menu_batches_enabled
+                else ""
+            )
+            + "<b>PARS — персональная система осведомлённости</b>\n\n"
             "Собираю сигналы, объединяю повторы и проверяю факты. "
             "Лента не должна превращаться в ещё один бесконечный скролл.\n\n"
             "⛔ / 👎 / 👍 / 🔥 — твоя оценка новости. Суперреакцию можно "
@@ -483,7 +498,7 @@ def register_sensory_handlers(router, settings: Settings, repository: Repository
             "Ссылка YouTube или /report ссылка — PDF с TL;DR и подробным резюме.\n"
             "/circle — кружочек из видео: команда в подписи или ответом на видео "
             "до 60 секунд и 20 МБ.\n"
-            "/week — недельная карта; /people — люди за неделю. "
+            "/week — недельная карта; /people week — люди за неделю. "
             "Только по проверенным событиям базы, не полный обзор мира.\n"
             "/sources — включить или выключить источники.\n"
             "/radar — состояние и расходы.\n"
