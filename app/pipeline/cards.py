@@ -408,6 +408,9 @@ def generate_cards(
     event_id: int | None = None,
     generator: OpenRouterCardGenerator | None = None,
 ) -> GenerationStats:
+    from app.personalization.daily import load_context
+
+    context = load_context(settings, repository)
     event_pool = repository.events_without_cards(
         limit if event_id is not None else max(limit * 5, 50),
         event_id=event_id,
@@ -421,6 +424,7 @@ def generate_cards(
             event_pool,
             recent_events=repository.recent_valid_card_events(days=7),
             limit=limit,
+            personalization=context,
         )
     )
     generator = generator or OpenRouterCardGenerator(settings)
@@ -535,10 +539,13 @@ def generate_cards(
                         "validation_error": str(exc),
                         "rejected_draft": result.draft.model_dump(),
                     }
-                    repair_error_refs = [{
-                        "event_id": event["id"], "attempt": attempt,
-                        "response_id": result.response_id,
-                    }]
+                    repair_error_refs = [
+                        {
+                            "event_id": event["id"],
+                            "attempt": attempt,
+                            "response_id": result.response_id,
+                        }
+                    ]
                     continue
 
                 if fallback_reasons:

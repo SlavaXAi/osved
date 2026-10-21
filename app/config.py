@@ -246,6 +246,8 @@ class Settings(BaseSettings):
     telegram_api_base_url: str | None = None
     media_downloads_enabled: bool = True
     menu_batches_enabled: bool = False
+    daily_personalization_enabled: bool = False
+    daily_selection_file: Path = Path("config/daily-selection.yaml")
     menu_preparation_max_cost_usd: float = Field(default=0.05, gt=0, le=0.25)
     media_max_file_bytes: int = Field(default=1_900_000_000, ge=1_000_000, le=1_900_000_000)
     media_max_storage_bytes: int = Field(default=4_500_000_000, ge=100_000_000)

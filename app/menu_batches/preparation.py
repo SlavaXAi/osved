@@ -142,6 +142,12 @@ def prepare_news(settings, repository, batch, budget):
             or entity_labels(settings, e, batch["kind"])
         )
     ]
+    from app.personalization.daily import load_context
+    from app.pipeline.ranking import rank_event_candidates
+
+    context = load_context(settings, repository, owner=batch["owner_id"])
+    if context:
+        candidates = rank_event_candidates(candidates, limit=5, personalization=context)
     web = BoundedWeb(settings, budget)
     for event in candidates[:5]:
         budget.check()

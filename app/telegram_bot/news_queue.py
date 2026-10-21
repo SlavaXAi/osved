@@ -100,7 +100,11 @@ async def send_next_news(
             cards = [retry_card]
         else:
             ids = fresh_delivery_card_ids(
-                repository, owner_id=owner, now=datetime.now(UTC), limit=batch_size
+                repository,
+                owner_id=owner,
+                now=datetime.now(UTC),
+                limit=batch_size,
+                settings=settings,
             )
             if not ids:
                 return {**result, "status": "queue_empty"}

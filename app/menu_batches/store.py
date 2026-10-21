@@ -135,7 +135,8 @@ class BatchStore:
         with self.repository.connection() as db:
             rows = db.execute(
                 f"""SELECT c.*,c.id card_id,e.entities_json,e.headline,e.fingerprint,
-                    e.score,i.original_text,i.source_url,s.kind source_kind
+                    e.score,e.score_features_json,e.event_type,
+                    i.original_text,i.source_url,s.kind source_kind
                 FROM cards c JOIN events e ON e.id=c.event_id
                 JOIN source_items i ON i.id=e.primary_source_item_id
                 JOIN sources s ON s.id=i.source_id
@@ -178,6 +179,26 @@ class BatchStore:
                     entity_key=f"event:{row['event_id']}",
                     payload=row,
                 )
+            )
+        from app.personalization.daily import load_context, record_selection
+        from app.pipeline.ranking import rank_event_candidates
+
+        context = load_context(self.settings, self.repository, owner=owner)
+        if context:
+            pool = [{**r["payload"], "id": r["payload"]["event_id"]} for r in candidates]
+            ranked = rank_event_candidates(pool, limit=len(pool), personalization=context)
+            positions = {r["card_id"]: i for i, r in enumerate(ranked)}
+            candidates = sorted(
+                [r for r in candidates if r["entity_id"] in positions],
+                key=lambda r: positions[r["entity_id"]],
+            )
+            record_selection(
+                self.repository,
+                context,
+                owner=owner,
+                stage="menu:" + kind,
+                candidates=pool,
+                selected=ranked[: KINDS[kind][2]],
             )
         return candidates
 

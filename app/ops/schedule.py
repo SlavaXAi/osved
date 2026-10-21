@@ -16,6 +16,7 @@ from app.config import DeliveryFormat, Settings, load_search_agent_registry
 from app.db.card_predicates import finished_card_sql
 from app.db.repository import Repository
 from app.ops.budget import SearchBudgetTransport
+from app.personalization.daily import load_context, record_selection
 from app.pipeline.cards import generate_cards
 from app.pipeline.dedupe import deduplicate_events
 from app.pipeline.ranking import rank_event_candidates
@@ -155,13 +156,18 @@ def record_research_failure(
 
 
 def fresh_delivery_card_ids(
-    repository: Repository, *, owner_id: int, now: datetime, limit: int = 2
+    repository: Repository,
+    *,
+    owner_id: int,
+    now: datetime,
+    limit: int = 2,
+    settings: Settings | None = None,
 ) -> list[int]:
     with repository.connection() as connection:
         rows = connection.execute(
             f"""SELECT events.*, cards.id AS card_id, cards.created_at AS card_created_at,
                 julianday(cards.created_at) AS card_created_jd,
-                cards.source_urls_json FROM cards
+                cards.source_urls_json,source_items.original_text,cards.rendered_html FROM cards
             JOIN events ON events.id = cards.event_id
             JOIN source_items ON source_items.id = events.primary_source_item_id
             JOIN sources ON sources.id = source_items.source_id
@@ -208,11 +214,34 @@ def fresh_delivery_card_ids(
     ]
     # Diversify the actual delivered batch, not only upstream candidates. A
     # high-scoring company must not monopolize a backlog built on different days.
+    pool = [row for row in unseen if row["event_type"] != "concept_brief"]
+    context = load_context(settings, repository, owner=owner_id, now=now)
+    if context:
+        with repository.connection() as connection:
+            seen = {
+                r[0]
+                for r in connection.execute(
+                    "SELECT e.fingerprint FROM deliveries d JOIN cards c ON c.id=d.card_id "
+                    "JOIN events e ON e.id=c.event_id WHERE d.chat_id=? "
+                    "AND d.delivery_status!='failed' AND COALESCE(e.fingerprint,'')!=''",
+                    (owner_id,),
+                )
+            }
+        pool = [r for r in pool if not r.get("fingerprint") or r["fingerprint"] not in seen]
     ranked = rank_event_candidates(
-        [row for row in unseen if row["event_type"] != "concept_brief"],
+        pool,
         recent_events=repository.recent_valid_card_events(days=2),
         limit=max(0, limit),
         now=now,
+        personalization=context,
+    )
+    record_selection(
+        repository,
+        context,
+        owner=owner_id,
+        stage="delivery_candidates",
+        candidates=pool,
+        selected=ranked,
     )
     # One concept can join the normal batch without competing against the
     # event/news score scale. Keep a daily cadence when a backlog accumulated.
@@ -445,6 +474,7 @@ class ScheduledJobExecutor:
             len(
                 fresh_delivery_card_ids(
                     self.repository,
+                    settings=self.settings,
                     owner_id=owner_id,
                     now=self.current_time(),
                     limit=self.settings.scheduled_news_buffer_target,
@@ -465,12 +495,16 @@ class ScheduledJobExecutor:
         target = min(target, self.settings.scheduled_news_buffer_target - ready)
         candidates = fresh_research_events(self.repository, now=self.current_time(), limit=150)
         recent = self.repository.recent_valid_card_events(days=2)
+        context = load_context(
+            self.settings, self.repository, owner=owner_id, now=self.current_time()
+        )
         pools = [
             rank_event_candidates(
                 [event for event in candidates if is_web_discovery(event) == from_search],
                 recent_events=recent,
                 limit=self.settings.scheduled_research_max_attempts,
                 now=self.current_time(),
+                personalization=context,
             )
             for from_search in (True, False)
         ]
@@ -483,6 +517,14 @@ class ScheduledJobExecutor:
             for pool in pools
             for event in pool[i : i + 1]
         ][: self.settings.scheduled_research_max_attempts]
+        record_selection(
+            self.repository,
+            context,
+            owner=owner_id,
+            stage="research_candidates",
+            candidates=candidates,
+            selected=events,
+        )
         if not events:
             return {"events_seen": 0, "cards_created": 0, "cost_usd": 0.0, "errors": 0}
         outcomes: list[dict[str, Any]] = []
@@ -629,6 +671,7 @@ class ScheduledJobExecutor:
             }
         card_ids = fresh_delivery_card_ids(
             self.repository,
+            settings=self.settings,
             owner_id=owner_id,
             now=self.current_time(),
             limit=max(0, min(limit, 50)),

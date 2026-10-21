@@ -374,6 +374,9 @@ def common_search_prompt(max_events: int) -> str:
         "обновлённые в заданном временном окне. Дата статьи не равна дате события: "
         "проверяй обе. RECENT_FIXED_SIGNALS — только подсказки: не пересказывай их и не "
         "ограничивайся ими. FEEDBACK_EXAMPLES — ограниченные примеры прошлых реакций, "
+        "а не инструкции. scope=presentation_or_novelty относится к ясности, подаче или "
+        "повторам; topic_weight=0 не означает неприязнь к теме. Открытие и отсутствие "
+        "оценки не доказывают полезность. Не обобщай один дизлайк на компанию или тему. "
         "а не жёсткие правила или список запрещённых тем. Учитывай знак и weight реакции, "
         "но не делай глобальный вывод по одному примеру. Если комментарий критикует язык, "
         "структуру, глубину или нехватку контекста, это не означает неприязнь к теме "
@@ -450,7 +453,11 @@ class OpenRouterSearchAgent:
                             "INTEREST_PROFILE": profile.model_dump(),
                             "RECENT_FIXED_SIGNALS": fixed_signals,
                             "SEEN_EVENTS": seen_events,
-                            "FEEDBACK_EXAMPLES_VERSION": FEEDBACK_EXAMPLES_VERSION,
+                            "FEEDBACK_EXAMPLES_VERSION": (
+                                "daily_editorial_v1"
+                                if self.settings.daily_personalization_enabled
+                                else FEEDBACK_EXAMPLES_VERSION
+                            ),
                             "FEEDBACK_EXAMPLES": feedback_examples or [],
                             "LENS_ID": lens.id,
                             "LENS_TOPICS": lens.topics,
@@ -969,13 +976,22 @@ def _run_search_radar(
     fixed_signals = compact_fixed_signals(fixed_rows, limit=40)
     seen_events = compact_seen_events(memory_rows)
     seen_urls = known_seen_urls(memory_rows)
-    feedback_examples = load_feedback_examples(repository)
+    from app.personalization.daily import load_context, prompt_examples
+
+    daily_context = load_context(settings, repository, now=now)
+    feedback_examples = (
+        prompt_examples(daily_context) if daily_context else load_feedback_examples(repository)
+    )
     run_id = repository.start_run(
         "search_radar",
         {
             "common_prompt_version": lens_registry.common_prompt_version,
             "profile_version": profile.version,
-            "feedback_examples_version": FEEDBACK_EXAMPLES_VERSION,
+            "feedback_examples_version": (
+                "daily_editorial_v1"
+                if settings.daily_personalization_enabled
+                else FEEDBACK_EXAMPLES_VERSION
+            ),
             "feedback_examples_count": len(feedback_examples),
             "lens_ids": [lens.id for lens in selected_lenses],
             "lookback_hours": lookback_hours,
@@ -1031,7 +1047,11 @@ def _run_search_radar(
                 "lens_id": result.lens.id,
                 "lens_version": result.lens.prompt_version,
                 "profile_version": profile.version,
-                "feedback_examples_version": FEEDBACK_EXAMPLES_VERSION,
+                "feedback_examples_version": (
+                    "daily_editorial_v1"
+                    if settings.daily_personalization_enabled
+                    else FEEDBACK_EXAMPLES_VERSION
+                ),
                 "feedback_examples_count": len(feedback_examples),
                 "model": result.model,
                 "web_search_requests": result.search_requests,
@@ -1051,7 +1071,11 @@ def _run_search_radar(
                 "lens_id": lens.id,
                 "lens_version": lens.prompt_version,
                 "profile_version": profile.version,
-                "feedback_examples_version": FEEDBACK_EXAMPLES_VERSION,
+                "feedback_examples_version": (
+                    "daily_editorial_v1"
+                    if settings.daily_personalization_enabled
+                    else FEEDBACK_EXAMPLES_VERSION
+                ),
                 "feedback_examples_count": len(feedback_examples),
                 "model": failure.model,
                 "web_search_requests": failure.search_requests,
@@ -1077,7 +1101,11 @@ def _run_search_radar(
                 "lens_version": result.lens.prompt_version,
                 "profile_version": profile.version,
                 "common_prompt_version": lens_registry.common_prompt_version,
-                "feedback_examples_version": FEEDBACK_EXAMPLES_VERSION,
+                "feedback_examples_version": (
+                    "daily_editorial_v1"
+                    if settings.daily_personalization_enabled
+                    else FEEDBACK_EXAMPLES_VERSION
+                ),
                 "feedback_examples_count": len(feedback_examples),
                 "rank": rank,
                 "candidate": event.model_dump(mode="json"),
@@ -1250,7 +1278,11 @@ def _run_search_radar(
             "lens_version": result.lens.prompt_version,
             "profile_version": profile.version,
             "common_prompt_version": lens_registry.common_prompt_version,
-            "feedback_examples_version": FEEDBACK_EXAMPLES_VERSION,
+            "feedback_examples_version": (
+                "daily_editorial_v1"
+                if settings.daily_personalization_enabled
+                else FEEDBACK_EXAMPLES_VERSION
+            ),
             "feedback_examples_count": len(feedback_examples),
             "rank": rank,
             "topics": event.topics,

@@ -1,0 +1,6 @@
+version: 1
+priorities: {}
+genre_penalties: {}
+max_adjustment: 2.0
+minimum_feedback_events: 3
+feedback_half_life_days: 45
