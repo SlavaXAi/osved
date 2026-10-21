@@ -37,6 +37,51 @@ running bot. Test messages, downloads, existing summaries, and PDFs afterwards.
 Do not silently downscale a chosen video to fit the upload limit. If the file
 is too large, select a smaller available quality.
 
+### Prepared local Bot API deployment
+
+`compose.telegram-api.yaml` is an opt-in overlay for `compose.server.yaml`.
+It is **not enabled by the normal deployment**. It pins the tested linux/amd64
+Bot API 10.3 image by digest, publishes no host port, and puts the API and bot
+on a separate Docker bridge. The API only receives its two application
+credentials. Both processes use uid/gid 10001 so the bot can read local
+`getFile` paths through the read-only mount at the same absolute path.
+Confirm that uid/gid against the actual runtime before enabling it.
+
+To prepare storage on the server (no transport change):
+
+```sh
+install -d -m 0700 -o 10001 -g 10001 data/telegram-bot-api data/telegram-bot-api/tmp
+```
+
+Activation requires a controlled migration, not just adding an environment
+variable:
+
+1. Obtain your own API ID/hash at my.telegram.org and put them in the private
+   `.env`. Do not use sample or another application's published credentials.
+   Validate the merged Compose configuration with `config --quiet`.
+2. Back up the Compose file and SQLite database. Wait for active downloads,
+   reports and deliveries to finish. Record the bot update offset and current
+   image; stop only `newsfeed`.
+3. Start only the `telegram-bot-api` service with both Compose files. Check its
+   local listener and shared-directory permissions. Do not authorize the live
+   bot there yet. A healthy listener alone does not verify Telegram access.
+4. Call `logOut` on the cloud Bot API once and verify success. Set the private
+   local endpoint using the overlay and start `newsfeed` with both Compose files.
+   Future deployments must keep using both files while local transport is active.
+5. Verify polling, existing card edits, voice/file downloads, PDFs, cached
+   `file_id` reuse, and a real video larger than 50 MB. Check disk headroom and
+   cleanup after the upload. Only then consider large-file delivery released.
+
+Rollback also needs a transport migration: stop `newsfeed`, log out on the
+local server, and allow for Telegram's cloud-login delay (at least ten minutes
+after the successful `logOut`). Preserve the live database and update offset, then
+restore cloud transport. Do not run polling on both endpoints concurrently.
+
+As of 2026-10-21 the image/version is verified and storage prepared on the
+existing server, but activation is blocked by app-registration throttling at
+my.telegram.org. The production upload limit remains 49 MB. Large files must
+remain one file: automatic splitting and compression are not enabled.
+
 ## State and recovery
 
 Migration `0027_media_downloads` stores manual requests, jobs, and Telegram

@@ -1,0 +1,62 @@
+# Optional overlay: do not enable before Telegram's cloud logOut migration.
+# Prepare data/telegram-bot-api and its tmp directory owned by 10001, mode 0700.
+# Own application credentials are required; empty values fail closed.
+services:
+  newsfeed:
+    environment:
+      TELEGRAM_API_BASE_URL: http://telegram-bot-api:8081
+    volumes:
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api:ro
+    networks: [default, telegram_api]
+    depends_on:
+      telegram-bot-api:
+        condition: service_healthy
+
+  telegram-bot-api:
+    # Verified on linux/amd64: Bot API 10.3. Community packaging of tdlib's server.
+    image: aiogram/telegram-bot-api@sha256:47f075e56b135ecc6f590fa059f4a8ad9c35e3672f6f29051e1a632fe27c1ccc
+    platform: linux/amd64
+    user: "10001:10001"
+    entrypoint: [telegram-bot-api]
+    command:
+      - --local
+      - --http-ip-address=0.0.0.0
+      - --http-port=8081
+      - --dir=/var/lib/telegram-bot-api
+      - --temp-dir=/var/lib/telegram-bot-api/tmp
+      - --verbosity=1
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?Own Telegram API ID is required}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?Own Telegram API hash is required}
+    volumes:
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
+    networks: [telegram_api]
+    # No host ports. Only newsfeed joins this dedicated bridge with the API.
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    stop_grace_period: 60s
+    mem_limit: 512m
+    mem_reservation: 128m
+    memswap_limit: 768m
+    cpus: 0.5
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, nc, -z, 127.0.0.1, "8081"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 6
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"
+
+networks:
+  default: {}
+  telegram_api: {}
