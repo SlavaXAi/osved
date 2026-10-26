@@ -457,6 +457,33 @@ def runtime_source_registry(settings: Settings) -> SourceRegistry:
             sqlite3.connect(settings.database_path.resolve().as_uri() + "?mode=ro", uri=True)
         ) as db:
             db.row_factory = sqlite3.Row
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='x_profile_subscriptions'"
+            ).fetchone():
+                for row in db.execute("SELECT * FROM x_profile_subscriptions"):
+                    seed = next((s for s in sources if s.id == row["source_id"]), None)
+                    if seed:
+                        continue  # Configured authors keep their tier and pause.
+                    sources.append(
+                        SourceConfig(
+                            id=row["source_id"],
+                            name="X — @" + row["handle"],
+                            kind=SourceKind.X,
+                            locator=row["handle"],
+                            role=SourceRole.AUTHOR_RADAR,
+                            candidate_enabled=False,
+                            priority="p1",
+                            region="global",
+                            language="und",
+                            topics=[],
+                            poll_interval_minutes=720,
+                            daily_call_cap=2,
+                            daily_candidate_cap=20,
+                            adapter_id="monid_x_author",
+                            strategy="author_timeline",
+                            options={"not_before": row["not_before"]},
+                        )
+                    )
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='youtube_channels'").fetchone():
                 for row in db.execute("SELECT * FROM youtube_channels"):
                     sources = [s for s in sources if s.id != row["source_id"]]

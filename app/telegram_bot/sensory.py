@@ -494,6 +494,8 @@ def register_sensory_handlers(router, settings: Settings, repository: Repository
             "/tgchannels — список, пауза и удаление.\n"
             "📺 <b>Канал YouTube</b> — пришли ссылку на канал для добавления в радар; "
             "/channels — управление.\n"
+            "📡 <b>Аккаунт X / Twitter</b> — пришли ссылку на профиль или /x @имя; "
+            "/sources — пауза и включение.\n"
             "/videos — рекомендации видео без превью; сводки только по запросу.\n"
             "Ссылка YouTube или /report ссылка — PDF с TL;DR и подробным резюме.\n"
             "/circle — кружочек из видео: команда в подписи или ответом на видео "

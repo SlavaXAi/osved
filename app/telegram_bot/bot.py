@@ -263,9 +263,11 @@ def build_router(settings: Settings, repository: Repository) -> Router:
     from app.telegram_bot.telegram_channels import register_telegram_channel_handlers
     from app.telegram_bot.video_notes import register_video_note_handlers
     from app.telegram_bot.video_reports import register_video_report_handlers
+    from app.telegram_bot.x_profiles import register_x_profile_handlers
 
     register_batch_handlers(router, settings, repository)
     register_video_note_handlers(router, settings, repository)
+    register_x_profile_handlers(router, settings, repository)
     register_media_handlers(router, settings, repository)
     register_biography_handlers(router, settings, repository)
     register_intelligence_handlers(router, settings, repository)
