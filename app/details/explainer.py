@@ -7,6 +7,7 @@ import html
 import ipaddress
 import json
 import re
+import unicodedata
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -125,6 +126,20 @@ TOOLS = [
     ),
     FINISH,
 ]
+
+
+def evidence_matches(quote, source):
+    """Ignore quotation typography, but preserve words, numbers and negation."""
+    # In CJK prose quotation marks also occur *inside* a selected excerpt.
+    # Removing these delimiters is safe; fuzzy matching or stripping all
+    # punctuation could instead turn a different number or claim into a match.
+    delimiters = str.maketrans("", "", '«»「」『』“”„‟"')
+
+    def normalized(value):
+        return " ".join(unicodedata.normalize("NFC", value).translate(delimiters).split())
+
+    needle = normalized(quote)
+    return bool(needle) and needle in normalized(source)
 
 
 def build_news_explanation(
@@ -277,9 +292,9 @@ def build_news_explanation(
                 for paragraph in candidate.paragraphs:
                     if any(i not in sources for i in paragraph.source_ids):
                         raise ValueError("Use only IDs of read sources")
-                    quote = " ".join(paragraph.evidence_quote.split())
                     if not any(
-                        quote in " ".join(sources[i]["text"].split()) for i in paragraph.source_ids
+                        evidence_matches(paragraph.evidence_quote, sources[i]["text"])
+                        for i in paragraph.source_ids
                     ):
                         raise ValueError("Evidence quote must be copied exactly from a read source")
                     if re.search(r"https?://|monid_(?:live|test)_", paragraph.text):

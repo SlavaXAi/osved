@@ -10,8 +10,14 @@ from pydantic import SecretStr
 from test_news_reader_flow import env as env  # noqa: F401
 
 from app.db.news_questions import claim_input, open_session, queue_question, reply_session
-from app.details.explainer import build_news_explanation, provider_fingerprint, public_url
+from app.details.explainer import (
+    build_news_explanation,
+    evidence_matches,
+    provider_fingerprint,
+    public_url,
+)
 from app.details.provider_guard import DetailProviderError, DurableDetailProvider
+from app.details.research import DetailGenerationError
 from app.details.transcription import transcribe_question
 from app.details.worker import DetailWorker
 from app.research.detail_policy import article_reference_fingerprint
@@ -163,6 +169,49 @@ def test_agent_repairs_unknown_source_and_invented_quote_without_displaying_them
     )
     assert len(seen) == 3 and result.document_ids == [doc]
     assert "invented quote" not in result.rendered_html
+
+
+def test_evidence_quote_tolerates_typography_but_not_changed_claims():
+    assert evidence_matches("«The product has 20 modes»", "The product has “20 modes”.")
+    assert evidence_matches("これからの20年間、世界", "これからの「20年間」、世界")
+    assert not evidence_matches("The product has 200 modes", "The product has 20 modes")
+    assert not evidence_matches("It is safe to use", "It is not safe to use")
+    assert not evidence_matches("profit was 10%", "profit was -10%")
+    assert not evidence_matches("«»", "An unrelated source")
+
+
+def test_typographic_quote_repair_reuses_already_paid_answer(env, monkeypatch):
+    s, r, panel, _, _, doc = setup(env)
+    calls = []
+
+    def transport(payload, key):
+        calls.append(payload)
+        return response("finish", finish(doc, quote="«" + QUOTE + "»"))
+
+    # Simulate an earlier strict validator rejecting a completely saved answer.
+    with monkeypatch.context() as m:
+        m.setattr("app.details.explainer.evidence_matches", lambda *_: False)
+        with pytest.raises(DetailGenerationError, match="tool budget"):
+            build_news_explanation(
+                s,
+                r,
+                panel["reader_context"]["baseline_event_id"],
+                depth="expanded",
+                reader_context=panel["reader_context"],
+                transport=transport,
+            )
+    paid_calls = len(calls)
+    result = build_news_explanation(
+        s,
+        r,
+        panel["reader_context"]["baseline_event_id"],
+        depth="expanded",
+        reader_context=panel["reader_context"],
+        transport=transport,
+    )
+    assert result.validation_status == "valid"
+    assert len(calls) == paid_calls
+    assert result.provider_response_metadata["incremental_attempt_cost_usd"] == 0
 
 
 def test_model_can_search_read_and_answer_the_actual_question(env):
