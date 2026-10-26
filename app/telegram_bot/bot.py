@@ -36,6 +36,7 @@ from app.telegram_bot.keyboards import (
     DetailsCallback,
     FeedbackCallback,
     NewsDepthCallback,
+    NewsQuestionCallback,
     detail_feedback_keyboard,
     reaction_keyboard,
     superreaction_keyboard,
@@ -259,15 +260,19 @@ def build_router(settings: Settings, repository: Repository) -> Router:
     from app.telegram_bot.intelligence import register_intelligence_handlers
     from app.telegram_bot.media_downloads import register_media_handlers
     from app.telegram_bot.menu_batches import register_batch_handlers
+    from app.telegram_bot.news_questions import register_news_question_handlers
     from app.telegram_bot.sensory import register_sensory_handlers
     from app.telegram_bot.telegram_channels import register_telegram_channel_handlers
     from app.telegram_bot.video_notes import register_video_note_handlers
     from app.telegram_bot.video_reports import register_video_report_handlers
     from app.telegram_bot.x_profiles import register_x_profile_handlers
+    from app.telegram_bot.x_reposts import register_repost_handlers
 
     register_batch_handlers(router, settings, repository)
     register_video_note_handlers(router, settings, repository)
+    register_news_question_handlers(router, settings, repository)
     register_x_profile_handlers(router, settings, repository)
+    register_repost_handlers(router, settings, repository)
     register_media_handlers(router, settings, repository)
     register_biography_handlers(router, settings, repository)
     register_intelligence_handlers(router, settings, repository)
@@ -400,9 +405,16 @@ def build_router(settings: Settings, repository: Repository) -> Router:
         user_id = message.from_user.id if message.from_user else None
         if not is_allowed(settings, repository, user_id) or user_id is None:
             return
+        with repository.connection() as db:
+            questions = db.execute(
+                "SELECT delivery_id FROM news_question_sessions WHERE chat_id=?", (user_id,)
+            ).fetchall()
+            db.execute("DELETE FROM news_question_sessions WHERE chat_id=?", (user_id,))
+        for question in questions:
+            await refresh_markup(message.bot, repository, question[0])
         session = repository.feedback_session_for_user(user_id)
         if session is None:
-            await message.answer("Нет ожидающего комментария.")
+            await message.answer("Вопрос отменён." if questions else "Нет ожидающего комментария.")
             return
         repository.clear_feedback_session(session["delivery_id"])
         context = repository.get_delivery_context(session["delivery_id"])
@@ -569,6 +581,12 @@ def build_router(settings: Settings, repository: Repository) -> Router:
             query, callback_data.delivery_id, "expanded" if callback_data.expanded else "base"
         )
 
+    @router.callback_query(NewsQuestionCallback.filter())
+    async def news_question_callback_handler(
+        query: CallbackQuery, callback_data: NewsQuestionCallback
+    ) -> None:
+        await dispatch_news_action(query, callback_data.delivery_id, "ask")
+
     @router.callback_query(DetailsCallback.filter())
     async def details_callback_handler(
         query: CallbackQuery, callback_data: DetailsCallback
@@ -720,6 +738,13 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     details_worker_stop: asyncio.Event | None = None
     media_task: asyncio.Task[None] | None = None
     batch_task: asyncio.Task[None] | None = None
+    repost_task: asyncio.Task[None] | None = None
+    if settings.x_reposts_enabled:
+        from app.reposts.service import RepostWorker
+
+        repost_task = asyncio.create_task(
+            RepostWorker(bot, settings, repository).run_loop(), name="x-repost-worker"
+        )
     if settings.menu_batches_enabled:
         from app.telegram_bot.menu_batches import BatchWorker
 
@@ -754,6 +779,10 @@ async def run_bot(settings: Settings, repository: Repository) -> None:
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        if repost_task is not None:
+            repost_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await repost_task
         if batch_task is not None:
             batch_task.cancel()
             with suppress(asyncio.CancelledError):

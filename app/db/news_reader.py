@@ -290,8 +290,16 @@ def store(repository, request_id, *, depth, reader_context=None, context_fingerp
         db.execute(
             "UPDATE detail_requests SET status='ready',stage='delivery',article_id=?,"
             "generation_key=?,lease_until=NULL,last_error=NULL,completed_at=?,updated_at=? "
+            ",reader_context_json=? "
             "WHERE id=?",
-            (artifact["id"], data["generation_key"], stamp, stamp, request_id),
+            (
+                artifact["id"],
+                data["generation_key"],
+                stamp,
+                stamp,
+                json.dumps(context, ensure_ascii=False),
+                request_id,
+            ),
         )
     return int(artifact["id"])
 

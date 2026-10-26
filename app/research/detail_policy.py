@@ -18,10 +18,10 @@ DETAIL_PROMPT_VERSION = (
 )
 NEWS_READER_SCHEMA_VERSION = "news_reader_v1"
 NEWS_READER_PROMPT_VERSION = (
-    f"news_reader_ru_v2:{FACT_EXTRACTION_PROMPT_VERSION}:{FACT_VALIDATION_POLICY_VERSION}"
+    f"news_explainer_ru_v1:{FACT_EXTRACTION_PROMPT_VERSION}:{FACT_VALIDATION_POLICY_VERSION}"
 )
 NEWS_READER_ARTICLE_PROMPT_VERSION = (
-    f"news_reader_ru_v3:{FACT_EXTRACTION_PROMPT_VERSION}:{FACT_VALIDATION_POLICY_VERSION}"
+    f"news_question_ru_v1:{FACT_EXTRACTION_PROMPT_VERSION}:{FACT_VALIDATION_POLICY_VERSION}"
 )
 
 
@@ -38,6 +38,12 @@ def article_reference_fingerprint(reader_context: dict) -> str:
         if text
         else {"mode": "baseline", "baseline": reader_context.get("context_fingerprint")}
     )
+    if reader_context.get("user_question") or reader_context.get("voice_input_sha256"):
+        material["question"] = (
+            {"audio_sha256": reader_context["voice_input_sha256"]}
+            if reader_context.get("voice_input_sha256")
+            else str(reader_context["user_question"]).strip()
+        )
     return hashlib.sha256(
         json.dumps(material, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()

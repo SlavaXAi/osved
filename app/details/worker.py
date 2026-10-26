@@ -282,7 +282,7 @@ class DetailWorker:
             **(
                 {
                     "depth": depth,
-                    "reader_context": reader_context,
+                    "reader_context": result.reader_context,
                     "context_fingerprint": fingerprint,
                 }
                 if depth != "legacy"

@@ -302,7 +302,7 @@ def test_details_callback_enqueues_and_answers_before_original_message_edit(
     assert request["status"] == "queued" and request["depth"] == "article"
     assert request["placeholder_message_id"] == 700
     assert query.calls == ["answer", "edit_text"]
-    assert query.answers == [("Собираю дополнительные источники", False)]
+    assert query.answers == [("Готовлю подробное объяснение", False)]
     result = query.bot.edited_text[-1]
     assert result["message_id"] == 700
     labels = [button.text for row in result["reply_markup"].inline_keyboard for button in row]

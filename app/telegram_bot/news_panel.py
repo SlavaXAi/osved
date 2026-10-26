@@ -24,7 +24,7 @@ from app.details.paging import (
     utf16_units,
 )
 from app.llm.openrouter import build_evidence_snippets
-from app.research.detail_policy import detail_policy_versions
+from app.research.detail_policy import article_reference_fingerprint, detail_policy_versions
 from app.telegram_bot.feedback import FeedbackAction
 from app.telegram_bot.keyboards import (
     REACTION_LABELS,
@@ -173,6 +173,10 @@ def ensure_news_panel(repository, delivery_id) -> dict:
         draft = {}
     if not isinstance(draft, dict):
         draft = {}
+    if draft.get("card_kind") == "x_repost":
+        # A repost is an adaptation of an author, never a validated news lead.
+        baseline_html = card["rendered_html"]
+        baseline_text = telegram_html_visible_text(baseline_html)
     urls, ids = _baseline_sources(repository, card, draft, baseline_html)
     reader = {
         "baseline_card_id": context["card_id"],
@@ -183,6 +187,8 @@ def ensure_news_panel(repository, delivery_id) -> dict:
         "baseline_source_urls": urls,
         "baseline_document_ids": ids,
     }
+    if draft.get("card_kind") == "x_repost":
+        reader["x_repost_id"] = draft["repost_id"]
     reader["context_fingerprint"] = hashlib.sha256(
         json.dumps(reader, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -230,6 +236,11 @@ def _artifact_matches(panel, request, artifact):
         and bool(artifact.get("schema_version"))
         and bool(artifact.get("prompt_version"))
         and artifact.get("validation_status") == "valid"
+        and (
+            request["depth"] != "article"
+            or article_reference_fingerprint(request["reader_context"])
+            == article_reference_fingerprint(artifact.get("reader_context") or {})
+        )
     )
 
 
@@ -348,7 +359,11 @@ def panel_keyboard(repository, panel, *, request=None, artifact=None, page_count
         request = repository.get_detail_request(panel["active_request_id"])
     if page_count is None:
         page_count = len(artifact_pages(repository, artifact)) if artifact else 1
-    if view == "base":
+    if view == "base" and panel["reader_context"].get("x_repost_id"):
+        from app.telegram_bot.x_reposts import feedback_buttons
+
+        b.attach(feedback_buttons(repository, panel))
+    elif view == "base":
         session = repository.feedback_session_for_user(panel["chat_id"])
         if session and session["delivery_id"] == panel["delivery_id"]:
             for action, label in [
@@ -393,14 +408,32 @@ def panel_keyboard(repository, panel, *, request=None, artifact=None, page_count
         thumbs.adjust(2)
         b.attach(thumbs)
     menu = InlineKeyboardBuilder()
-    for depth, label in [("expanded", "Подробнее"), ("article", "Статья")]:
-        if view == "loading" and request and request["depth"] == depth:
-            label = "Готовлю " + label.lower() + "…"
+    question_label = (
+        "Задать вопрос" if panel["reader_context"].get("x_repost_id") else "Запросить разбор"
+    )
+    for depth, label in [("expanded", "Подробнее"), ("ask", question_label)]:
+        if (
+            view == "loading"
+            and request
+            and request["depth"] == ("article" if depth == "ask" else depth)
+        ):
+            label = "Готовлю разбор…" if depth == "ask" else "Готовлю подробности…"
         elif view == depth:
             label = "✓ " + label
         menu.button(text=label, callback_data=callback(depth))
     menu.adjust(2)
     b.attach(menu)
+    saved = repository.detail_request_for_delivery(panel["delivery_id"], depth="article")
+    if saved and saved["status"] in {"ready", "sent"} and view != "article":
+        b.button(text="Открыть готовый разбор", callback_data=callback("article"))
+    with repository.connection() as db:
+        awaiting = db.execute(
+            "SELECT 1 FROM news_question_sessions WHERE chat_id=? AND delivery_id=? "
+            "AND datetime(expires_at)>datetime('now')",
+            (panel["chat_id"], panel["delivery_id"]),
+        ).fetchone()
+    if awaiting:
+        b.button(text="Отменить вопрос", callback_data=callback("cancel_question"))
     if view in {"expanded", "article"} and page_count > 1:
         paging = InlineKeyboardBuilder()
         if panel["page"] > 0:
@@ -451,18 +484,32 @@ def _current_content(repository, panel):
 async def _edit_and_commit(
     bot, repository, current, updated, text, *, request=None, artifact=None, page_count=1
 ):
-    if telegram_html_visible_units(text) > 4096:
+    repost_id = current["reader_context"].get("x_repost_id")
+    if not repost_id and telegram_html_visible_units(text) > 4096:
         raise ValueError("News panel text exceeds Telegram")
+    content = {
+        "text": text,
+        "parse_mode": "HTML",
+        "link_preview_options": LinkPreviewOptions(is_disabled=True),
+    }
+    if repost_id:
+        from app.reposts.media import rich_content
+        from app.reposts.store import get
+
+        repost = get(repository, repost_id)
+        files = json.loads(repost["media_json"] or "[]") if repost else []
+        visible_view = (
+            updated["previous_view"] if updated["view"] in {"loading", "error"} else updated["view"]
+        )
+        content = {"rich_message": rich_content(text, files if visible_view == "base" else [])}
     try:
         await bot.edit_message_text(
             chat_id=current["chat_id"],
             message_id=current["message_id"],
-            text=text,
-            parse_mode="HTML",
+            **content,
             reply_markup=panel_keyboard(
                 repository, updated, request=request, artifact=artifact, page_count=page_count
             ),
-            link_preview_options=LinkPreviewOptions(is_disabled=True),
             request_timeout=8,
         )
     except TelegramBadRequest as exc:

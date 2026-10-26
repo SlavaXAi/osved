@@ -88,7 +88,7 @@ def test_expansion_enqueues_once_and_back_keeps_original_message_and_reaction(re
     assert edits[-1]["text"] == panel["baseline_html"]
     final = edits[-1]["reply_markup"].inline_keyboard
     assert [button.text for button in final[0]] == ["⛔", "👎", "👍", "✅ 🔥"]
-    assert [button.text for button in final[1]] == ["Подробнее", "Статья"]
+    assert [button.text for button in final[1]] == ["Подробнее", "Запросить разбор"]
     with repo.connection() as db:
         assert db.execute("SELECT count(*) FROM detail_requests").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM feedback_events").fetchone()[0] == 1
@@ -136,7 +136,7 @@ def test_pending_comment_state_and_article_navigation_survive_expansion(real_rea
         for row in query.bot.edited_text[-1]["reply_markup"].inline_keyboard
         for button in row
     ]
-    assert "Статья" in labels and "← Назад" in labels
+    assert "Запросить разбор" in labels and "← Назад" in labels
     assert any(label.startswith("Готовлю") for label in labels)
 
 

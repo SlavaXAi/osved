@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.radar.feedback import REACTION_WEIGHTS
 
-VERSION = "daily_editorial_v2"
+VERSION = "daily_editorial_v3"
 QUALITY = re.compile(
     r"структур|абзац|заголов|оформл|формулиров|повтор|однотип|вод[аыу]|поверхност|"
     r"реклам|нечитаб|не\s*ясн|не\s+пон[яи]ма|поинт|споинт|в\s+ч[её]м\s+смысл|"
@@ -205,6 +205,7 @@ class DailyContext:
     examples: list[dict]
     now: datetime
     engagement: list[dict] = field(default_factory=list)
+    curations: object | None = None
 
     @cached_property
     def digest(self):
@@ -213,6 +214,7 @@ class DailyContext:
             self.policy.model_dump(),
             [(e["feedback_id"], e["topic_weight"]) for e in self.examples],
             self.engagement,
+            self.curations.digest if self.curations else None,
         ]
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:24]
 
@@ -281,7 +283,14 @@ class DailyContext:
         adaptive_cap = min(0.6, self.policy.max_adjustment * 0.3)
         editorial_cap = self.policy.max_adjustment - adaptive_cap
         editorial = max(-editorial_cap, min(editorial_cap, priority - penalties))
-        adaptive = max(-adaptive_cap, min(adaptive_cap, feedback + engagement))
+        curation = (
+            self.curations.adjustment(event_text(event))
+            if self.curations
+            else {"adjustment": 0, "examples": []}
+        )
+        adaptive = max(
+            -adaptive_cap, min(adaptive_cap, feedback + engagement + curation["adjustment"])
+        )
         total = editorial + adaptive
         return {
             "version": VERSION,
@@ -291,6 +300,7 @@ class DailyContext:
             "genre_penalty": round(-penalties, 3),
             "feedback": round(feedback, 3),
             "engagement": engagement,
+            "curation": curation,
             "editorial": round(editorial, 3),
             "adaptive": round(adaptive, 3),
             "adaptive_cap": round(adaptive_cap, 3),
@@ -304,6 +314,8 @@ class DailyContext:
 
 
 def load_context(settings, repository, *, owner=None, now=None):
+    from app.reposts.learning import load_index
+
     if not settings or not settings.daily_personalization_enabled:
         return None
     owner = owner or settings.allowed_user_id or repository.get_runtime_setting("allowed_user_id")
@@ -317,6 +329,7 @@ def load_context(settings, repository, *, owner=None, now=None):
         feedback_examples(repository, int(owner), now=now),
         now,
         engagement_examples(repository, int(owner), now=now),
+        load_index(repository, int(owner), now),
     )
 
 

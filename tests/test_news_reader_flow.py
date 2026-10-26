@@ -169,7 +169,7 @@ def test_more_research_updates_original_and_back_reopens_free(env):
         for row in bot.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard
         for b in row
     ]
-    assert any("Полезно" in x for x in labels) and any("Статья" in x for x in labels)
+    assert any("Полезно" in x for x in labels) and any("Запросить разбор" in x for x in labels)
     action(env, "base")
     assert get_news_panel(repo, delivery["delivery_id"])["view"] == "base"
     action(env, "expanded")

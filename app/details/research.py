@@ -2716,6 +2716,17 @@ def build_detail_article(
     """Worker-facing vertical slice from an event to a rendered, grounded article."""
 
     reader_context = reader_context or {}
+    if depth != "legacy" and reader_context.get("reader_mode") == "explainer":
+        from app.details.explainer import build_news_explanation
+
+        return build_news_explanation(
+            settings,
+            repository,
+            event_id,
+            depth=depth,
+            reader_context=reader_context,
+            progress=progress,
+        )
     schema_version, prompt_version = detail_policy_versions(depth)
     max_cost = detail_max_cost(settings, depth)
     context_fingerprint = str(reader_context.get("context_fingerprint") or "")

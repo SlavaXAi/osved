@@ -245,6 +245,8 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     telegram_api_base_url: str | None = None
     media_downloads_enabled: bool = True
+    x_reposts_enabled: bool = False
+    x_repost_max_cost_usd: float = Field(default=0.02, gt=0, le=0.05)
     menu_batches_enabled: bool = False
     daily_personalization_enabled: bool = False
     daily_selection_file: Path = Path("config/daily-selection.yaml")

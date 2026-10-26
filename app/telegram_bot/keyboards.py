@@ -20,6 +20,10 @@ class DetailsCallback(CallbackData, prefix="dt"):
     delivery_id: int
 
 
+class NewsQuestionCallback(CallbackData, prefix="nq"):
+    delivery_id: int
+
+
 class NewsDepthCallback(CallbackData, prefix="nd"):
     delivery_id: int
     expanded: bool
@@ -82,8 +86,8 @@ def _add_details_button(
             callback_data=NewsDepthCallback(delivery_id=delivery_id, expanded=True),
         )
         builder.button(
-            text="Статья",
-            callback_data=DetailsCallback(delivery_id=delivery_id),
+            text="Запросить разбор",
+            callback_data=NewsQuestionCallback(delivery_id=delivery_id),
         )
         return
     builder.button(

@@ -29,7 +29,8 @@ def terminal_text(request):
         return "Разбор остановлен лимитом расходов. Сохранённые материалы доступны для возврата."
     if status == "insufficient_evidence":
         return (
-            "Не хватило новых прочитанных источников по этой новости для содержательного разбора."
+            "Не удалось прочитать материалы по этой новости. "
+            "Можно задать конкретный вопрос кнопкой «Запросить разбор»."
         )
     return "Не удалось завершить разбор. Исходная новость и собранные материалы сохранены."
 
@@ -56,7 +57,17 @@ async def handle_news_action(
     ):
         await query.answer("Кнопка не относится к этой новости", show_alert=True)
         return
-    if action not in {"base", "back", "expanded", "article", "prev", "next", "retry"}:
+    if action not in {
+        "base",
+        "back",
+        "expanded",
+        "article",
+        "prev",
+        "next",
+        "retry",
+        "ask",
+        "cancel_question",
+    }:
         await query.answer("Неизвестное действие", show_alert=True)
         return
     event = repository.event_context(context["event_id"])
@@ -66,8 +77,34 @@ async def handle_news_action(
     lock = LOCKS.setdefault(delivery_id, asyncio.Lock())
     async with lock:
         panel = ensure_news_panel(repository, delivery_id)
+        if panel["reader_context"].get("x_repost_id"):
+            from app.reposts.store import get
+
+            repost = get(repository, panel["reader_context"]["x_repost_id"])
+            if not repost or repost["status"] != "ready":
+                await query.answer("Сначала дождись готовности публикации")
+                return
         if revision >= 0 and revision != panel["revision"]:
             await query.answer("Карточка обновилась. Нажми кнопку в текущем меню.")
+            return
+        if action == "ask":
+            if not settings.details_enabled:
+                await query.answer("Разборы сейчас выключены", show_alert=True)
+                return
+            from app.telegram_bot.news_questions import ask_question
+
+            await ask_question(query, repository, panel)
+            return
+        if action == "cancel_question":
+            with repository.connection() as db:
+                db.execute(
+                    "DELETE FROM news_question_sessions WHERE chat_id=? AND delivery_id=?",
+                    (panel["chat_id"], delivery_id),
+                )
+            await query.answer("Вопрос отменён")
+            from app.telegram_bot.news_panel import refresh_markup
+
+            await refresh_markup(query.bot, repository, delivery_id)
             return
         if action == "base":
             await query.answer()
@@ -132,13 +169,24 @@ async def handle_news_action(
                     "SELECT 1 FROM details_provider_calls WHERE event_id=? AND depth=? "
                     "AND baseline_fingerprint=? AND provider='openrouter' "
                     "AND status IN('preparing','uncertain') LIMIT 1",
-                    (request["event_id"], request["depth"], reader["context_fingerprint"]),
+                    (
+                        request["event_id"],
+                        request["depth"],
+                        reader.get("provider_fingerprint", reader["context_fingerprint"]),
+                    ),
                 ).fetchone()
             if uncertain:
                 await query.answer(
                     "Предыдущий платный шаг не подтверждён; повтор заблокирован.", show_alert=True
                 )
                 return
+            if request["depth"] == "expanded":
+                with repository.connection() as db:
+                    db.execute(
+                        "UPDATE detail_requests SET reader_context_json="
+                        "json_set(reader_context_json,'$.reader_mode','explainer') WHERE id=?",
+                        (request["request_id"],),
+                    )
             request = repository.retry_detail_request(request["request_id"])
         else:
             request = repository.detail_request_for_delivery(delivery_id, depth=action)
@@ -165,13 +213,13 @@ async def handle_news_action(
                 delivery_id,
                 query.from_user.id,
                 depth=action,
-                reader_context=panel["reader_context"],
+                reader_context={**panel["reader_context"], "reader_mode": "explainer"},
                 max_daily_new=settings.details_max_daily_new,
             )
         if request["status"] == "daily_limit":
             await query.answer("Сегодня достигнут лимит новых разборов", show_alert=True)
             return
-        await query.answer("Собираю дополнительные источники")
+        await query.answer("Готовлю подробное объяснение")
         if request["status"] == "ready":
             artifact = repository.get_detailed_article(request["article_id"])
             if await show_result(query.bot, repository, panel, request, artifact):
@@ -222,4 +270,17 @@ def record_news_result_feedback(repository, panel, request, action):
             "feedback_event_id=excluded.feedback_event_id,updated_at=excluded.updated_at",
             (artifact["id"], panel["chat_id"], action, cursor.lastrowid),
         )
+        if panel["reader_context"].get("x_repost_id"):
+            db.execute(
+                "UPDATE x_curation_samples SET vote=?,"
+                "voted_at=strftime('%Y-%m-%dT%H:%M:%f+00:00','now') "
+                "WHERE chat_id=? AND tweet_id="
+                "(SELECT tweet_id FROM x_reposts WHERE id=? AND chat_id=?)",
+                (
+                    1 if action == "useful" else -1,
+                    panel["chat_id"],
+                    panel["reader_context"]["x_repost_id"],
+                    panel["chat_id"],
+                ),
+            )
     return True

@@ -10,6 +10,7 @@ from app.telegram_bot.keyboards import (
     DetailsCallback,
     FeedbackCallback,
     NewsDepthCallback,
+    NewsQuestionCallback,
     detail_feedback_keyboard,
     reaction_keyboard,
     superreaction_keyboard,
@@ -20,9 +21,7 @@ PROJECT_ROOT = Path(__file__).parents[1]
 
 def delivery(repository: Repository) -> int:
     repository.migrate()
-    repository.sync_sources(
-        load_source_registry(PROJECT_ROOT / "tests/fixtures/config/sources.yaml")
-    )
+    repository.sync_sources(load_source_registry(PROJECT_ROOT / "tests/fixtures/config/sources.yaml"))
     return repository.create_smoke_delivery(123, "https://example.com/news")["delivery_id"]
 
 
@@ -34,12 +33,17 @@ def test_reaction_types_and_keyboards() -> None:
     keyboard = reaction_keyboard(1)
     reaction_buttons = keyboard.inline_keyboard[0]
     assert [button.text for button in reaction_buttons] == ["⛔", "👎", "👍", "🔥"]
-    assert [button.text for button in keyboard.inline_keyboard[1]] == ["Подробнее", "Статья"]
+    assert [button.text for button in keyboard.inline_keyboard[1]] == [
+        "Подробнее",
+        "Запросить разбор",
+    ]
     assert FeedbackCallback.unpack(reaction_buttons[0].callback_data).action == (
         FeedbackAction.SUPERDISLIKE
     )
     assert NewsDepthCallback.unpack(keyboard.inline_keyboard[1][0].callback_data).delivery_id == 1
-    assert DetailsCallback.unpack(keyboard.inline_keyboard[1][1].callback_data).delivery_id == 1
+    assert (
+        NewsQuestionCallback.unpack(keyboard.inline_keyboard[1][1].callback_data).delivery_id == 1
+    )
 
     super_keyboard = superreaction_keyboard(1)
     assert [row[0].text for row in super_keyboard.inline_keyboard] == [

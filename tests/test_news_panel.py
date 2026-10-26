@@ -127,7 +127,7 @@ def test_baseline_is_frozen_and_base_menu_keeps_four_news_reactions(panel_env):
     assert ensure_news_panel(repo, panel["delivery_id"])["reader_context"] == context
     markup = panel_keyboard(repo, panel)
     assert [button.text for button in markup.inline_keyboard[0]] == ["⛔", "👎", "👍", "🔥"]
-    assert "Подробнее" in labels(markup) and "Статья" in labels(markup)
+    assert "Подробнее" in labels(markup) and "Запросить разбор" in labels(markup)
     controls = [
         button
         for row in markup.inline_keyboard
@@ -148,7 +148,7 @@ def test_pending_superreaction_survives_reading_and_returns_to_base_menu(panel_e
         FeedbackCallback.unpack(row[0].callback_data).action for row in markup.inline_keyboard[:3]
     ]
     assert controls == [FeedbackAction.COMMENT, FeedbackAction.SILENT, FeedbackAction.BACK]
-    assert "Подробнее" in labels(markup) and "Статья" in labels(markup)
+    assert "Подробнее" in labels(markup) and "Запросить разбор" in labels(markup)
     request, artifact = completed_result(repo, panel)
     assert asyncio.run(show_result(bot, repo, panel, request, artifact))
     result_labels = labels(bot.edit_message_text.call_args.kwargs["reply_markup"])

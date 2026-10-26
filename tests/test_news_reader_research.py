@@ -339,8 +339,8 @@ def test_article_actual_more_target_prompt_and_semantic_cache_identity():
     assert key == detail_generation_key(
         7, docs, depth="article", reader_context={**ctx, "retry_authorization": "new-nonce"}
     )
-    assert detail_policy_versions("expanded")[1].startswith("news_reader_ru_v2:")
-    assert detail_policy_versions("article")[1].startswith("news_reader_ru_v3:")
+    assert detail_policy_versions("expanded")[1].startswith("news_explainer_ru_v1:")
+    assert detail_policy_versions("article")[1].startswith("news_question_ru_v1:")
 
 
 def test_article_fact_prompt_and_novelty_compare_with_already_shown_more():

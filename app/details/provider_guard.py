@@ -16,7 +16,7 @@ from app.llm.accounting import (
     nonnegative_int,
     resolve_usage_cost,
 )
-from app.llm.openrouter import OpenRouterResponseError
+from app.llm.openrouter import OpenRouterRequestError, OpenRouterResponseError
 from app.research.web import (
     SCRAPE_COST_USD,
     SEARCH_RESULT_COST_USD,
@@ -45,6 +45,8 @@ class DetailProviderError(RuntimeError):
                 ),
                 "budget_blocked": "Paid request would exceed its reserved budget",
                 "failed": "Confirmed provider failure; automatic replay is blocked",
+                "routing_unavailable": ("Request rejected before model dispatch; "
+                                        "routing unavailable"),
             }.get(status, status)
         )
 
@@ -202,6 +204,14 @@ class DurableDetailProvider:
                     except (TypeError, ValueError, KeyError) as exc:
                         raise DetailProviderError("failed", call_id=old["id"]) from exc
                 error = json.loads(old["error_json"] or "{}")
+                if (
+                    old["status"] == "rejected"
+                    and error.get("http_status") == 404
+                    and error.get("rejected_before_dispatch") is True
+                ):
+                    raise DetailProviderError(
+                        "routing_unavailable", call_id=old["id"], cost_usd=0, http_status=404
+                    )
                 retryable = (
                     old["status"] == "rejected"
                     and error.get("http_status") == 402
@@ -311,7 +321,12 @@ class DurableDetailProvider:
             value = call()
         except Exception as exc:
             http_status = _http_status(exc)
-            rejected = http_status == 402
+            routing_rejected = (
+                http_status == 404
+                and isinstance(exc, OpenRouterRequestError)
+                and getattr(exc, "rejected_before_dispatch", False) is True
+            )
+            rejected = http_status == 402 or routing_rejected
             charged = finite_money(getattr(exc, "cost_usd", None))
             confirmed = charged is not None and (
                 bool(getattr(exc, "response_id", None)) or isinstance(exc, OpenRouterResponseError)
@@ -345,7 +360,11 @@ class DurableDetailProvider:
                 },
             )
             raise DetailProviderError(
-                "insufficient_credits" if rejected else status,
+                "routing_unavailable"
+                if routing_rejected
+                else "insufficient_credits"
+                if rejected
+                else status,
                 call_id=call_id,
                 cost_usd=settled,
                 http_status=http_status,
