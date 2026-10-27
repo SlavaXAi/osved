@@ -384,7 +384,15 @@ def test_worker_reuses_news_panel_and_keeps_full_media(env, monkeypatch):
         media, "acquire", lambda *a: [{"kind": "photo", "file_id": "cached", "index": 0}]
     )
     bot = SimpleNamespace(
-        edit_message_text=AsyncMock(return_value=SimpleNamespace(rich_message=None))
+        edit_message_text=AsyncMock(),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=81)),
+        send_photo=AsyncMock(
+            return_value=SimpleNamespace(
+                message_id=82,
+                photo=[SimpleNamespace(file_id="cached", width=600, height=400)],
+                video=None,
+            )
+        ),
     )
     assert asyncio.run(RepostWorker(bot, *env).process(row))
     saved = store.get(env[1], row["id"])
@@ -392,7 +400,10 @@ def test_worker_reuses_news_panel_and_keeps_full_media(env, monkeypatch):
     assert panel["reader_context"]["x_repost_id"] == row["id"]
     assert len(panel["baseline_html"]) > 3900
     args = bot.edit_message_text.call_args.kwargs
-    assert args["message_id"] == 80 and args["rich_message"].media[0].media.media == "cached"
+    assert args["message_id"] == 80 and "rich_message" not in args
+    assert bot.send_photo.call_args.kwargs["photo"] == "cached"
+    assert bot.send_message.call_count >= 1
+    assert store.get(env[1], row["id"])["native_kind"] == "text"
     buttons = str(args["reply_markup"])
     assert "Подробнее" in buttons and "Задать вопрос" in buttons and "Разобрать тезис" in buttons
     assert asyncio.run(show_base(bot, env[1], panel))

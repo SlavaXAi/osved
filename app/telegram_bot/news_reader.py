@@ -6,9 +6,9 @@ import asyncio
 import json
 
 from app.telegram_bot.news_panel import (
-    artifact_pages,
     cached_back_target,
     ensure_news_panel,
+    reader_pages,
     set_loading,
     show_base,
     show_error,
@@ -123,7 +123,9 @@ async def handle_news_action(
                     saved_page = int(saved or 0)
                 except (ValueError, TypeError):
                     saved_page = 0
-                saved_page = max(0, min(saved_page, len(artifact_pages(repository, artifact)) - 1))
+                saved_page = max(
+                    0, min(saved_page, len(reader_pages(repository, panel, artifact)) - 1)
+                )
                 await show_result(
                     query.bot,
                     repository,

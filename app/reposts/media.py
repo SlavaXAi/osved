@@ -1,4 +1,4 @@
-"""Bounded downloads from X's media hosts, and one forwardable rich publication."""
+"""Bounded downloads and original display geometry for forwardable X media."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import hashlib
 import html
 import json
 import shutil
+import subprocess
 import time
-from pathlib import Path
+from fractions import Fraction
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from aiogram.types import (
@@ -19,6 +20,124 @@ from aiogram.types import (
 )
 
 from app.reposts.provider import safe_media_url
+
+
+def video_geometry(path):
+    payload = json.loads(
+        subprocess.run(
+            ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        ).stdout
+    )
+    stream = next(s for s in payload["streams"] if s.get("codec_type") == "video")
+    width, height = int(stream["width"]), int(stream["height"])
+    sar = str(stream.get("sample_aspect_ratio") or "1:1")
+    rotation = next(
+        (int(x.get("rotation", 0)) for x in stream.get("side_data_list", []) if "rotation" in x), 0
+    )
+    if not 0 < width <= 16384 or not 0 < height <= 16384:
+        raise ValueError("Invalid video dimensions")
+    return {
+        "width": width,
+        "height": height,
+        "duration": max(1, round(float(payload.get("format", {}).get("duration") or 0))),
+        "sar": sar,
+        "rotation": rotation,
+    }
+
+
+def prepare_video(path, *, cap):
+    geometry = video_geometry(path)
+    sar = geometry["sar"]
+    if sar not in {"1:1", "0:1", "N/A"} or geometry["rotation"] % 360:
+        # Only normalize files with non-square pixels/rotation; ordinary X MP4s
+        # retain their original bytes. Never scale into an arbitrary square.
+        if sar not in {"0:1", "N/A"} and not 0 < Fraction(sar.replace(":", "/")) <= 16:
+            raise ValueError("Invalid video aspect ratio")
+        target = path.with_name(path.stem + "-display.mp4")
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-v",
+                "error",
+                "-threads",
+                "1",
+                "-filter_threads",
+                "1",
+                "-i",
+                str(path),
+                "-vf",
+                "scale=trunc(iw*sar/2)*2:ih,setsar=1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-threads",
+                "1",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(target),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=180,
+        )
+        if not 0 < target.stat().st_size <= cap:
+            target.unlink(missing_ok=True)
+            raise ValueError("too_large")
+        path = target
+        geometry = video_geometry(path)
+    return path, {k: geometry[k] for k in ("width", "height", "duration")}
+
+
+def video_thumbnail(path):
+    """A small real frame for Telegram's preview, without changing the video."""
+    target = path.with_suffix(".thumb.jpg")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-y",
+                "-v",
+                "error",
+                "-threads",
+                "1",
+                "-filter_threads",
+                "1",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=320:320:force_original_aspect_ratio=decrease,setsar=1",
+                "-q:v",
+                "4",
+                "-threads",
+                "1",
+                str(target),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        if not 0 < target.stat().st_size < 200_000:
+            raise ValueError("Invalid video thumbnail size")
+        target.chmod(0o600)
+        return target
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # A preview failure must not discard an otherwise usable video.
+        target.unlink(missing_ok=True)
+        return None
 
 
 class SafeRedirect(HTTPRedirectHandler):
@@ -62,7 +181,7 @@ def download_file(url, path, *, cap, opener=None, timeout=180):
 
 def acquire(settings, row, post):
     previous = json.loads(row.get("media_json") or "[]")
-    if previous and all(m.get("file_id") or Path(m.get("path", "")).is_file() for m in previous):
+    if previous and all(m.get("native_file_id") and m.get("file_id") for m in previous):
         return previous
     root = settings.data_dir / "x-reposts" / "media" / str(row["id"])
     root.mkdir(parents=True, exist_ok=True)
@@ -86,12 +205,19 @@ def acquire(settings, row, post):
                 download_file(
                     url, path, cap=min(cap, 10_000_000) if item["kind"] == "photo" else cap
                 )
+                geometry = {}
+                if item["kind"] == "video":
+                    path, geometry = prepare_video(path, cap=cap)
+                    thumbnail = video_thumbnail(path)
+                    if thumbnail:
+                        geometry["thumbnail_path"] = str(thumbnail.resolve())
                 files.append(
                     {
                         "kind": item["kind"],
                         "path": str(path.resolve()),
                         "index": index,
                         "size": path.stat().st_size,
+                        **geometry,
                     }
                 )
                 break
@@ -139,6 +265,22 @@ def rich_content(text, files):
 
 
 def remember_file_ids(message, files):
+    if len(files) == 1 and getattr(message, "video", None):
+        v = message.video
+        if (v.width, v.height) != (files[0]["width"], files[0]["height"]):
+            raise ValueError("Telegram returned different video dimensions")
+        return [{**files[0], "file_id": v.file_id, "native_file_id": True}]
+    if len(files) == 1 and getattr(message, "photo", None):
+        p = max(message.photo, key=lambda p: p.width * p.height)
+        return [
+            {
+                **files[0],
+                "file_id": p.file_id,
+                "width": p.width,
+                "height": p.height,
+                "native_file_id": True,
+            }
+        ]
     rich = getattr(message, "rich_message", None)
     if not rich:
         return files

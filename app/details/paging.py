@@ -212,3 +212,51 @@ def paginate_telegram_html(
     if current:
         pages.append("\n\n".join(part.rendered for part in current))
     return pages
+
+
+def paginate_native_html(full_html: str, *, page_limit: int) -> list[str]:
+    """Keep complete paragraphs where possible; split oversized prose without loss.
+
+    Native captions are much smaller than article pages. An oversized paragraph
+    may lose inline styling at its message boundary, but never words or Unicode
+    code points. Links and formatting in other paragraphs remain intact.
+    """
+    import unicodedata
+
+    pieces = []
+    for paragraph in _paragraphs(full_html):
+        if utf16_units(paragraph.visible) <= page_limit:
+            pieces.append(paragraph.rendered)
+            continue
+        text = paragraph.visible
+        while utf16_units(text) > page_limit:
+            units = end = 0
+            for character in text:
+                size = 2 if ord(character) > 0xFFFF else 1
+                if units + size > page_limit:
+                    break
+                units += size
+                end += 1
+            boundary = max(
+                (text.rfind(c, max(0, end - 400), end) for c in " \n。！？.!?"), default=-1
+            )
+            if boundary > 0:
+                end = boundary + 1
+            else:
+                while (
+                    end > 0
+                    and end < len(text)
+                    and (
+                        unicodedata.combining(text[end])
+                        or text[end] in "\u200d\ufe0f\ufe0e"
+                        or text[end - 1] == "\u200d"
+                    )
+                ):
+                    end -= 1
+            if not end:
+                raise TelegramPagingError("A single Unicode cluster exceeds the message limit")
+            pieces.append(html.escape(text[:end]))
+            text = text[end:]
+        if text.strip():
+            pieces.append(html.escape(text))
+    return paginate_telegram_html("\n\n".join(pieces), repeat_header=False, page_limit=page_limit)

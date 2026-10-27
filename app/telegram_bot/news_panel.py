@@ -18,6 +18,7 @@ from aiogram.types import LinkPreviewOptions
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.details.paging import (
+    paginate_native_html,
     paginate_telegram_html,
     telegram_html_visible_text,
     telegram_html_visible_units,
@@ -285,9 +286,10 @@ def _source_footer(artifact):
     return "\n".join(notes)
 
 
-def artifact_pages(repository, artifact):
+def artifact_pages(repository, artifact, *, page_limit=4096):
     footer = _source_footer(artifact)
-    material = [artifact["rendered_html"], footer, _FORMAT_VERSION]
+    reserve = 180 if page_limit == 1024 else _STATUS_RESERVE
+    material = [artifact["rendered_html"], footer, _FORMAT_VERSION, page_limit]
     digest = hashlib.sha256(json.dumps(material, ensure_ascii=False).encode()).hexdigest()
     key = f"news_reader_pages:{artifact['id']}:{digest}"
     cached = repository.get_runtime_setting(key)
@@ -295,28 +297,44 @@ def artifact_pages(repository, artifact):
         try:
             pages = json.loads(cached)
             if pages and all(
-                isinstance(page, str) and telegram_html_visible_units(page) <= 4096
+                isinstance(page, str) and telegram_html_visible_units(page) <= page_limit
                 for page in pages
             ):
                 return pages
         except (ValueError, TypeError):
             pass
     limit = (
-        4096
+        page_limit
         - telegram_html_visible_units(footer)
         - utf16_units("Страница 999/999")
         - 4
-        - _STATUS_RESERVE
+        - reserve
     )
-    pages = paginate_telegram_html(artifact["rendered_html"], page_limit=limit)
+    splitter = paginate_native_html if page_limit == 1024 else paginate_telegram_html
+    pages = splitter(artifact["rendered_html"], page_limit=limit)
     result = [
         page + "\n\n" + footer + (f"\n\nСтраница {index}/{len(pages)}" if len(pages) > 1 else "")
         for index, page in enumerate(pages, 1)
     ]
-    if any(telegram_html_visible_units(page) > 4096 - _STATUS_RESERVE for page in result):
+    if any(telegram_html_visible_units(page) > page_limit - reserve for page in result):
         raise ValueError("Reader page leaves no room for inline progress")
     repository.set_runtime_setting(key, json.dumps(result, ensure_ascii=False))
     return result
+
+
+def panel_limit(repository, panel):
+    repost_id = panel["reader_context"].get("x_repost_id")
+    if repost_id:
+        from app.reposts.store import get
+
+        row = get(repository, repost_id)
+        if row and row.get("native_kind") in {"video", "photo"}:
+            return 1024
+    return 4096
+
+
+def reader_pages(repository, panel, artifact):
+    return artifact_pages(repository, artifact, page_limit=panel_limit(repository, panel))
 
 
 def cached_back_target(repository, panel):
@@ -358,7 +376,7 @@ def panel_keyboard(repository, panel, *, request=None, artifact=None, page_count
     if view in {"loading", "error"} and request is None and panel.get("active_request_id"):
         request = repository.get_detail_request(panel["active_request_id"])
     if page_count is None:
-        page_count = len(artifact_pages(repository, artifact)) if artifact else 1
+        page_count = len(reader_pages(repository, panel, artifact)) if artifact else 1
     if view == "base" and panel["reader_context"].get("x_repost_id"):
         from app.telegram_bot.x_reposts import feedback_buttons
 
@@ -476,9 +494,18 @@ def _current_content(repository, panel):
             else None
         )
         if _artifact_matches(panel, request, artifact):
-            pages = artifact_pages(repository, artifact)
+            pages = reader_pages(repository, panel, artifact)
             return pages[min(page, len(pages) - 1)]
-    return panel["baseline_html"]
+    # Long repost text was delivered in full as ordinary companion messages.
+    # Keep its first bubble within Telegram's edit limit during reader navigation.
+    text = panel["baseline_html"]
+    limit = panel_limit(repository, panel)
+    splitter = (
+        paginate_native_html
+        if panel["reader_context"].get("x_repost_id")
+        else paginate_telegram_html
+    )
+    return splitter(text, page_limit=limit)[0]
 
 
 async def _edit_and_commit(
@@ -501,9 +528,30 @@ async def _edit_and_commit(
         visible_view = (
             updated["previous_view"] if updated["view"] in {"loading", "error"} else updated["view"]
         )
-        content = {"rich_message": rich_content(text, files if visible_view == "base" else [])}
+        native_kind = repost.get("native_kind") if repost else None
+        if native_kind:
+            limit = 1024 if native_kind in {"video", "photo"} else 4096
+            if telegram_html_visible_units(text) > limit:
+                if updated["view"] in {"loading", "error"}:
+                    note = (
+                        "<i>Готовлю разбор…</i>"
+                        if updated["view"] == "loading"
+                        else html.escape(updated.get("error_text") or "Разбор пока недоступен")
+                    )
+                    available = limit - telegram_html_visible_units(note) - 4
+                    text = note + "\n\n" + paginate_native_html(text, page_limit=available)[0]
+                else:
+                    text = paginate_native_html(text, page_limit=limit)[0]
+            if native_kind in {"video", "photo"}:
+                content = {"caption": text, "parse_mode": "HTML"}
+            else:
+                content["text"] = text
+        else:
+            # Existing, unconverted cards remain readable until explicitly repaired.
+            content = {"rich_message": rich_content(text, files if visible_view == "base" else [])}
     try:
-        await bot.edit_message_text(
+        edit = bot.edit_message_caption if "caption" in content else bot.edit_message_text
+        await edit(
             chat_id=current["chat_id"],
             message_id=current["message_id"],
             **content,
@@ -611,7 +659,7 @@ async def show_result(
             current["view"] != "loading" or current["active_request_id"] != request["request_id"]
         ):
             return False
-        pages = artifact_pages(repository, artifact)
+        pages = reader_pages(repository, current, artifact)
         if isinstance(page, bool) or not isinstance(page, int) or not 0 <= page < len(pages):
             return False
         updated = {

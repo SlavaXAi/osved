@@ -9,7 +9,7 @@ from aiogram.types import ReplyParameters
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.media.downloads import message_links
-from app.reposts import media, store
+from app.reposts import store
 
 
 class RepostAction(CallbackData, prefix="xr"):
@@ -109,9 +109,9 @@ def register_repost_handlers(router, settings, repository):
             )
             return
         try:
-            panel = await message.bot.send_rich_message(
+            panel = await message.bot.send_message(
                 chat_id=owner,
-                rich_message=media.rich_content("Готовлю перевод и медиа…", []),
+                text="Готовлю перевод и медиа…",
                 reply_parameters=ReplyParameters(message_id=message.message_id),
             )
         except Exception:

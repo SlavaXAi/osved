@@ -81,7 +81,7 @@ class RepostWorker:
         self.bot, self.settings, self.repository = bot, settings, repository
 
     async def process(self, row):
-        from app.telegram_bot.news_panel import ensure_news_panel, panel_keyboard
+        from app.telegram_bot.news_panel import ensure_news_panel
 
         with self.repository.connection() as db:
             if not db.execute(
@@ -112,17 +112,14 @@ class RepostWorker:
                     (json.dumps(files), warning, row["id"]),
                 )
             delivery_id = bind_card(self.repository, row, post, translation)
-            panel = ensure_news_panel(self.repository, delivery_id)
-            text = panel["baseline_html"]
-            # Status is outside the forwardable body, in a recoverable control button.
-            result = await self.bot.edit_message_text(
-                chat_id=row["chat_id"],
-                message_id=row["panel_message_id"],
-                rich_message=media.rich_content(text, files),
-                reply_markup=panel_keyboard(self.repository, panel),
-                request_timeout=120,
+            from app.reposts.native import publish, refresh_baseline
+
+            panel = refresh_baseline(
+                self.repository,
+                ensure_news_panel(self.repository, delivery_id),
+                media.body_html(post, translation, row["source_url"]),
             )
-            files = media.remember_file_ids(result, files)
+            files = await publish(self.bot, self.repository, row, panel, files)
             with self.repository.connection() as db:
                 db.execute(
                     "UPDATE x_reposts SET status='ready',media_json=?,updated_at=? WHERE id=?",
@@ -150,12 +147,21 @@ class RepostWorker:
             )
 
             try:
-                await self.bot.edit_message_text(
-                    chat_id=row["chat_id"],
-                    message_id=row["panel_message_id"],
-                    rich_message=media.rich_content(error_text, []),
-                    reply_markup=error_keyboard(row),
-                )
+                fresh = store.get(self.repository, row["id"])
+                if fresh.get("native_kind"):
+                    # A failed companion must not erase the delivered translation.
+                    await self.bot.edit_message_reply_markup(
+                        chat_id=row["chat_id"],
+                        message_id=row["panel_message_id"],
+                        reply_markup=error_keyboard(row),
+                    )
+                else:
+                    await self.bot.edit_message_text(
+                        chat_id=row["chat_id"],
+                        message_id=row["panel_message_id"],
+                        text=error_text,
+                        reply_markup=error_keyboard(row),
+                    )
             except Exception:
                 logger.warning("Could not update X repost error panel %s", row["id"])
             return False

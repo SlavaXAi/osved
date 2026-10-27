@@ -135,6 +135,15 @@ def for_delivery(repository, delivery_id):
 def retry(repository, row):
     with repository.connection() as db:
         db.execute("BEGIN IMMEDIATE")
+        if db.execute(
+            "SELECT 1 FROM x_repost_outbox WHERE repost_id=? "
+            "AND status IN ('preparing','uncertain') LIMIT 1",
+            (row["id"],),
+        ).fetchone():
+            raise ValueError(
+                "Отправка части публикации не подтверждена. Сначала проверь чат; "
+                "автоматический повтор заблокирован."
+            )
         if row.get("delivery_id"):
             panel = db.execute(
                 "SELECT view,previous_view FROM news_panels WHERE delivery_id=?",
