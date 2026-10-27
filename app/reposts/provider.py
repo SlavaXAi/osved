@@ -300,6 +300,94 @@ def guard_for(settings, repository, row):
     )
 
 
+def saved_translation_answer(repository, row):
+    """Format repairs reuse the paid answer even if model settings have changed."""
+    with repository.connection() as db:
+        cached = db.execute(
+            "SELECT response_json FROM details_provider_calls WHERE event_id=? "
+            "AND baseline_fingerprint=? AND provider='openrouter' "
+            "AND stage='x_translation' AND status='completed' ORDER BY id DESC LIMIT 1",
+            (row["event_id"], "x-repost-v1:" + row["tweet_id"]),
+        ).fetchone()
+    if not cached:
+        return None
+    answer = json.loads(cached[0])
+    if not isinstance(answer, dict):
+        # A corrupt saved answer is not permission to spend on another one.
+        raise ValueError("Сохранённый ответ требует проверки; повторная оплата отключена")
+    return answer
+
+
+def schema_fragment(text, original):
+    """Recognize only short, dangling schema fields, never ordinary foreign words."""
+    if text in original or "\n" in text:
+        return False
+    match = re.fullmatch(r"""[\s"'`{}\[\],;:]*(?:thesis|paragraphs)\b(.{0,24})""", text)
+    if not match:
+        return False
+    tail = match[1]
+    # Broken field delimiters with at most a few corrupted characters, e.g.
+    # 'thesis ור='. A meaningful Latin/Cyrillic value or any number is retained.
+    return (
+        bool(re.search(r"""[:="'{}\[\]]""", tail))
+        and not re.search(r"[A-Za-zА-Яа-яЁё0-9]", tail)
+        and sum(c.isalpha() for c in tail) <= 3
+    )
+
+
+def parse_translation(answer, original):
+    choice = (answer.get("choices") or [{}])[0]
+    if choice.get("finish_reason") == "length":
+        raise ValueError("Ответ сохранён, но перевод оборвался; повторная оплата отключена")
+    message = choice.get("message") or {}
+    if message.get("refusal"):
+        raise ValueError("Сохранённый ответ не содержит готового перевода")
+    content = message.get("content") or ""
+    content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
+    value = json.loads(content)
+    if not isinstance(value, dict):
+        raise ValueError("Сохранённый перевод требует проверки структуры")
+    raw = value.get("paragraphs")
+    repairs = []
+    if isinstance(raw, str):
+        raw = [raw]
+        repairs.append("paragraph_string")
+    if not isinstance(raw, list):
+        raise ValueError("Сохранённый перевод требует проверки структуры")
+    paragraphs = []
+    for item in raw:
+        if item is None or (isinstance(item, str) and not item.strip()):
+            repairs.append("empty_paragraph")
+            continue
+        if isinstance(item, dict) and set(item) == {"text"}:
+            item = item["text"]
+            repairs.append("text_wrapper")
+        if not isinstance(item, str):
+            # Unknown objects may contain actual translation; don't silently lose it.
+            raise ValueError("Сохранённый перевод требует проверки структуры")
+        if item.strip():
+            paragraphs.append(item.strip())
+        else:
+            repairs.append("empty_paragraph")
+    while paragraphs and schema_fragment(paragraphs[-1], original):
+        paragraphs.pop()
+        repairs.append("trailing_schema_fragment")
+    if not paragraphs:
+        raise ValueError("Сохранённый ответ не содержит готового перевода")
+    split = [p.strip() for item in paragraphs for p in re.split(r"\n[ \t]*\n+", item) if p.strip()]
+    if len(split) != len(paragraphs):
+        repairs.append("paragraph_breaks")
+    thesis = value.get("thesis")
+    translation = {
+        "paragraphs": split,
+        "thesis": thesis.strip()[:400] if isinstance(thesis, str) else "",
+        "style": "faithful_v2",
+    }
+    if repairs:
+        translation["structure_repairs"] = sorted(set(repairs))
+    return translation
+
+
 def prepare(
     settings,
     repository,
@@ -344,7 +432,8 @@ def prepare(
     if not post["text"]:
         translation = {"paragraphs": [], "thesis": ""}
     else:
-        if len(post["text"]) > 18000:
+        answer = saved_translation_answer(repository, row)
+        if answer is None and len(post["text"]) > 18000:
             raise ValueError("Пост слишком длинный для автоматического перевода в пределах бюджета")
         payload = {
             "model": settings.openrouter_search_model,
@@ -362,30 +451,13 @@ def prepare(
             "provider": {"require_parameters": True, "max_price": {"prompt": 0.5, "completion": 2}},
             "reasoning": {"effort": "low", "exclude": True},
         }
-        if not settings.openrouter_api_key:
-            raise ValueError("Перевод не настроен")
-        answer = guard.llm_transport(transport, "x_translation")(
-            payload, settings.openrouter_api_key.get_secret_value()
-        )
-        choice = (answer.get("choices") or [{}])[0]
-        content = (choice.get("message") or {}).get("content") or ""
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-        translation = json.loads(content)
-        if choice.get("finish_reason") == "length":
-            raise ValueError("Ответ сохранён, но перевод оборвался; повторная оплата отключена")
-        paragraphs = translation.get("paragraphs")
-        if (
-            not isinstance(paragraphs, list)
-            or not paragraphs
-            or len(paragraphs) > 60
-            or any(not isinstance(p, str) or not p.strip() for p in paragraphs)
-        ):
-            raise ValueError("Сохранённый перевод требует проверки структуры")
-        translation = {
-            "paragraphs": [p.strip() for p in paragraphs],
-            "thesis": str(translation.get("thesis") or "")[:400],
-            "style": "faithful_v2",
-        }
+        if answer is None:
+            if not settings.openrouter_api_key:
+                raise ValueError("Перевод не настроен")
+            answer = guard.llm_transport(transport, "x_translation")(
+                payload, settings.openrouter_api_key.get_secret_value()
+            )
+        translation = parse_translation(answer, post["text"])
     with repository.connection() as db:
         db.execute(
             "UPDATE x_reposts SET translation_json=? WHERE id=?",
