@@ -24,6 +24,18 @@ def media_link(value: str) -> tuple[str, str, str]:
     if p.scheme != "https" or p.username or p.password or p.port not in (None, 443):
         raise ValueError("Unsupported media URL")
     host = (p.hostname or "").lower()
+    if host in {
+        "music.yandex.ru",
+        "music.yandex.com",
+        "music.yandex.by",
+        "music.yandex.kz",
+        "music.yandex.uz",
+    }:
+        match = re.fullmatch(r"/(?:album/([1-9]\d{0,14})/)?track/([1-9]\d{0,14})/?", p.path)
+        if match:
+            album, track = match.groups()
+            path = f"/album/{album}/track/{track}" if album else "/track/" + track
+            return "yandex_music", track, "https://music.yandex.ru" + path
     if host in {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}:
         parts = p.path.strip("/").split("/")
         ident = (
@@ -114,7 +126,7 @@ def cache_key(req, index, choice):
     ).hexdigest()
 
 
-def enqueue(repository, req, index, choice):
+def enqueue(repository, req, index, choice, *, once=False):
     manifest = json.loads(req["manifest_json"] or "{}")
     items = manifest.get("items", [])
     if not 0 <= index < len(items) or choice not in items[index]["choices"]:
@@ -122,9 +134,10 @@ def enqueue(repository, req, index, choice):
     with repository.connection() as db:
         db.execute("BEGIN IMMEDIATE")
         # A previously delivered result is deliberately reusable by an explicit click.
+        states = "" if once else "AND status IN ('queued','running','sending')"
         r = db.execute(
             "SELECT * FROM media_download_jobs WHERE request_id=? "
-            "AND item_index=? AND choice=? AND status IN ('queued','running','sending')",
+            "AND item_index=? AND choice=? " + states + " ORDER BY id DESC LIMIT 1",
             (req["id"], index, choice),
         ).fetchone()
         if r:
@@ -317,6 +330,10 @@ class Downloader:
         ]
 
     async def inspect(self, req, *, cancelled=lambda: False):
+        if req["platform"] == "yandex_music":
+            from app.media.yandex_music import describe
+
+            return await asyncio.to_thread(describe, self.settings, req)
         output = await self.command(
             self.base_args() + ["--dump-single-json", "--skip-download", req["source_url"]],
             timeout=90,
@@ -331,6 +348,10 @@ class Downloader:
         return normalize_info(raw, req["platform"])
 
     async def download(self, req, job, *, cancelled=lambda: False):
+        if req["platform"] == "yandex_music":
+            from app.media.yandex_music import download
+
+            return await download(self, req, job, cancelled=cancelled)
         item = json.loads(req["manifest_json"])["items"][job["item_index"]]
         choice = item["choices"][job["choice"]]
         if choice.get("size", 0) > self.max_bytes:

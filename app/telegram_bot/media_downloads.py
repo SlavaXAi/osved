@@ -26,6 +26,12 @@ from app.media.downloads import (
 
 logger = logging.getLogger(__name__)
 ERRORS = {
+    "music_login_required": (
+        "Для полного трека нужно один раз подключить аккаунт Яндекс Музыки с Плюсом."
+    ),
+    "music_full_track_unavailable": "Яндекс не предоставил полный трек для этого аккаунта.",
+    "music_preview_only": "Яндекс вернул только фрагмент песни. Короткую версию не отправляю.",
+    "music_cover_unavailable": "Не удалось получить обложку. Попробуй позже.",
     "login_required": "Источник требует авторизацию. Файл пока не удалось получить.",
     "rate_limited": "Источник временно ограничил запросы. Автоповтор выключен.",
     "unavailable": "Не удалось получить файл: источник недоступен или ограничил загрузку.",
@@ -51,6 +57,14 @@ class MediaAction(CallbackData, prefix="md"):
 
 def keyboard(req, max_bytes):
     b = InlineKeyboardBuilder()
+    if req["platform"] == "yandex_music":
+        if req["status"] in {"failed", "cancelled", "ready"}:
+            b.button(
+                text="Получить MP3",
+                callback_data=MediaAction(request_id=req["id"], action="inspect"),
+            )
+        b.button(text="Отменить", callback_data=MediaAction(request_id=req["id"], action="cancel"))
+        return b.as_markup()
     manifest = json.loads(req.get("manifest_json") or "{}")
     items = manifest.get("items", [])
     if items:
@@ -93,9 +107,15 @@ async def show(bot, repository, req, settings, text=None):
     manifest = json.loads(req.get("manifest_json") or "{}")
     title = html.escape(manifest.get("title") or "Скачать медиа")
     body = f"<b>{title}</b>\n\n" + (
-        text or "Выбери качество. Готовый файл придёт сюда, в Telegram."
+        text
+        or (
+            "Готовлю MP3 с обложкой…"
+            if req["platform"] == "yandex_music"
+            else "Выбери качество. Готовый файл придёт сюда, в Telegram."
+        )
     )
-    body += f'\n\n<a href="{html.escape(req["source_url"], quote=True)}">Источник</a>'
+    if req["platform"] != "yandex_music":
+        body += f'\n\n<a href="{html.escape(req["source_url"], quote=True)}">Источник</a>'
     try:
         await bot.edit_message_text(
             chat_id=req["chat_id"],
@@ -121,7 +141,9 @@ async def ensure_panel(bot, repository, req, settings):
     try:
         msg = await bot.send_message(
             req["chat_id"],
-            "<b>Скачать медиа</b>\n\nВыбери действие.",
+            "Готовлю MP3 с обложкой…"
+            if req["platform"] == "yandex_music"
+            else "<b>Скачать медиа</b>\n\nВыбери действие.",
             reply_markup=keyboard(req, Downloader(settings).max_bytes),
             reply_parameters=ReplyParameters(
                 message_id=req["request_message_id"], allow_sending_without_reply=True
@@ -175,7 +197,7 @@ class MediaFilter(BaseFilter):
         command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.strip() else ""
         if command.startswith("/"):
             return command == "/download"
-        return any(link[0] == "x" for link in message_links(message))
+        return any(link[0] in {"x", "yandex_music"} for link in message_links(message))
 
 
 def register_media_handlers(router, settings, repository):
@@ -194,12 +216,30 @@ def register_media_handlers(router, settings, repository):
             raise SkipHandler()
         links = message_links(message)
         if len(links) != 1:
-            await message.answer("Пришли одну ссылку YouTube или X: /download https://…")
+            await message.answer("Пришли одну ссылку на YouTube, пост X или трек Яндекс Музыки.")
             return
         req = request(
             repository, chat_id=message.chat.id, message_id=message.message_id, link=links[0]
         )
+        if req["platform"] == "yandex_music":
+            with repository.connection() as db:
+                sent = db.execute(
+                    "SELECT 1 FROM media_download_jobs WHERE request_id=? AND status='sent'",
+                    (req["id"],),
+                ).fetchone()
+            if sent:
+                return  # Telegram redelivery of the same input must not send a second song.
         await ensure_panel(message.bot, repository, req, settings)
+        if req["platform"] == "yandex_music":
+            if req["status"] == "ready":
+                enqueue(repository, req, 0, "mp3", once=True)
+            else:
+                with repository.connection() as db:
+                    db.execute(
+                        "UPDATE media_requests SET status='queued',error=NULL WHERE id=? "
+                        "AND status IN ('new','failed','cancelled')",
+                        (req["id"],),
+                    )
 
     @router.callback_query(MediaAction.filter())
     async def clicked(callback, callback_data):
@@ -245,6 +285,20 @@ def register_media_handlers(router, settings, repository):
             return
         if callback_data.action == "inspect":
             with repository.connection() as db:
+                if req["platform"] == "yandex_music":
+                    uncertain = db.execute(
+                        "SELECT 1 FROM media_download_jobs WHERE request_id=? "
+                        "AND status='uncertain'",
+                        (req["id"],),
+                    ).fetchone()
+                    if uncertain:
+                        await callback.answer(ERRORS["delivery_uncertain"], show_alert=True)
+                        return
+                    db.execute(
+                        "UPDATE media_download_jobs SET status='queued',error=NULL,updated_at=? "
+                        "WHERE request_id=? AND status IN ('failed','cancelled')",
+                        (time.time(), req["id"]),
+                    )
                 db.execute(
                     "UPDATE media_requests SET status='queued',error=NULL WHERE id=? "
                     "AND status NOT IN ('queued','preparing')",
@@ -289,6 +343,20 @@ class MediaWorker:
                 "UPDATE media_download_jobs SET status='uncertain',error='delivery_uncertain' "
                 "WHERE status='sending'"
             )
+            music = [
+                dict(r)
+                for r in db.execute(
+                    "SELECT * FROM media_requests WHERE platform='yandex_music' "
+                    "AND status='ready' AND manifest_json IS NOT NULL"
+                )
+            ]
+        for req in music:
+            try:
+                enqueue(self.repository, req, 0, "mp3", once=True)
+            except MediaError as exc:
+                if exc.code != "queue_full":
+                    raise
+                break  # The normal loop resumes remaining gaps as space becomes available.
 
     def cancelled(self, table, ident):
         with self.repository.connection() as db:
@@ -326,6 +394,14 @@ class MediaWorker:
                         "error=NULL,updated_at=? WHERE id=? AND status='preparing'",
                         (json.dumps(manifest, ensure_ascii=False), time.time(), req["id"]),
                     )
+                if req["platform"] == "yandex_music":
+                    enqueue(
+                        self.repository,
+                        get_request(self.repository, req["id"]),
+                        0,
+                        "mp3",
+                        once=True,
+                    )
                 await show(
                     self.bot,
                     self.repository,
@@ -339,6 +415,16 @@ class MediaWorker:
                 await self.failure(req, None, "unavailable")
             return True
         if not job:
+            with self.repository.connection() as db:
+                pending = db.execute(
+                    "SELECT r.* FROM media_requests r WHERE r.platform='yandex_music' "
+                    "AND r.status='ready' AND r.manifest_json IS NOT NULL AND NOT EXISTS "
+                    "(SELECT 1 FROM media_download_jobs j WHERE j.request_id=r.id) "
+                    "ORDER BY r.id LIMIT 1"
+                ).fetchone()
+            if pending:
+                enqueue(self.repository, dict(pending), 0, "mp3", once=True)
+                return True
             return False
         job = dict(job)
         req = get_request(self.repository, job["request_id"])
@@ -377,12 +463,21 @@ class MediaWorker:
                 + '">Источник</a>'
             )
             common = dict(chat_id=req["chat_id"], caption=caption, request_timeout=900)
+            music = req["platform"] == "yandex_music"
+            if music:
+                common.pop("caption")
             try:
                 if result["kind"] == "audio":
+                    extra = {}
+                    if music:
+                        extra["performer"] = result["performer"][:300]
+                        if not cached:
+                            extra["thumbnail"] = FSInputFile(result["thumbnail_path"])
                     msg = await self.bot.send_audio(
                         audio=file,
                         title=result["title"][:300],
                         duration=result["duration"],
+                        **extra,
                         **common,
                     )
                     sent_file = msg.audio
@@ -406,7 +501,9 @@ class MediaWorker:
                         self.bot.id,
                         sent_file.file_id,
                         result["kind"],
-                        json.dumps({k: v for k, v in result.items() if k != "path"}),
+                        json.dumps(
+                            {k: v for k, v in result.items() if k not in {"path", "thumbnail_path"}}
+                        ),
                         time.time(),
                     ),
                 )
@@ -416,6 +513,18 @@ class MediaWorker:
                     (msg.message_id, time.time(), job["id"]),
                 )
             self.downloader.remove_job_files(job["id"])
+            if music:
+                if req.get("panel_message_id"):
+                    try:
+                        await self.bot.delete_message(req["chat_id"], req["panel_message_id"])
+                        with self.repository.connection() as db:
+                            db.execute(
+                                "UPDATE media_requests SET panel_message_id=NULL WHERE id=?",
+                                (req["id"],),
+                            )
+                    except Exception:
+                        logger.info("Could not remove music progress message %s", req["id"])
+                return True
             await show(
                 self.bot,
                 self.repository,
