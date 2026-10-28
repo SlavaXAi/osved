@@ -128,7 +128,7 @@ def test_one_daily_call_creates_two_distinct_grounded_cards_and_splits_run_cost(
         cards = db.execute("SELECT generation_cost_usd,rendered_html FROM cards").fetchall()
         assert len(cards) == 2
         assert sum(row[0] for row in cards) == pytest.approx(result["cost_usd"])
-        assert all("единичный сигнал" in row[1] for row in cards)
+        assert all("единичный сигнал" not in row[1] for row in cards)
         assert db.execute("SELECT COUNT(*) FROM usage_ledger").fetchone()[0] == 1
     assert (
         prepare_concept_brief(settings, repo, now=now, transport=transport)["status"]

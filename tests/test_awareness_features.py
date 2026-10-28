@@ -326,8 +326,8 @@ def test_concept_card_is_full_in_feed_and_deduped(env):
     assert fresh_delivery_card_ids(repo, owner_id=OWNER, now=now, limit=5) == [card_id]
     card = repo.deliverable_cards_by_ids(OWNER, [card_id])[0]
     rendered = brief_card_html(card)
-    assert "Почему об этом говорят" in rendered and "Что это меняет" in rendered
-    assert "единичный сигнал" in rendered and sources[0]["url"] in rendered
+    assert "Почему об этом говорят" not in rendered and "Что это меняет" not in rendered
+    assert "единичный сигнал" not in rendered and sources[0]["url"] in rendered
     delivery = repo.ensure_delivery(card_id, OWNER)
     repo.mark_delivery_sent(delivery, 42)
     assert fresh_delivery_card_ids(repo, owner_id=OWNER, now=now, limit=5) == []

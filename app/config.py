@@ -163,6 +163,7 @@ class XAuthorConfig(BaseModel):
     name: str
     topics: list[str] = Field(default_factory=list)
     initial_tier: XAuthorTier
+    poll_interval_minutes: int | None = Field(default=None, ge=360, le=10080)
     enabled: bool = True
     weekly_persona: bool = False
 
@@ -441,7 +442,8 @@ def runtime_source_registry(settings: Settings) -> SourceRegistry:
             region="global",
             language="en",
             topics=author.topics,
-            poll_interval_minutes=X_TIER_POLL_INTERVAL_MINUTES[author.initial_tier],
+            poll_interval_minutes=author.poll_interval_minutes
+            or X_TIER_POLL_INTERVAL_MINUTES[author.initial_tier],
             calibration_lookback_days=21,
             production_max_age_days=(8 if author.initial_tier == XAuthorTier.SOSVEDE else 5),
             daily_candidate_cap={
