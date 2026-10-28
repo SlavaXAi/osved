@@ -5,6 +5,7 @@ import json
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 from app.config import load_weekly_persona_registry
 from app.db.card_predicates import finished_card_sql
@@ -29,16 +30,56 @@ def normalized(text):
     return re.sub(r"\W+", " ", str(text).casefold()).strip()
 
 
-def entity_labels(settings, event, kind):
-    entities = json.loads(event.get("entities_json") or "{}")
-    if not isinstance(entities, dict):
+def entity_names(value):
+    if isinstance(value, (str, dict)):
+        value = [value]
+    if not isinstance(value, list):
         return []
+    result = []
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("name") or item.get("canonical_name")
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
+
+
+def x_author(event):
+    try:
+        url = urlsplit(event.get("source_url") or "")
+        if (
+            url.scheme == "https"
+            and url.hostname
+            in {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
+            and not url.username
+            and not url.password
+        ):
+            handle = url.path.strip("/").split("/")[0]
+            if re.fullmatch(r"[A-Za-z0-9_]{1,15}", handle) and handle not in {
+                "i",
+                "home",
+                "search",
+            }:
+                return handle.casefold()
+    except ValueError:
+        pass
+    return None
+
+
+def entity_labels(settings, event, kind):
+    entities = event.get("entities_json") or event.get("entities") or {}
+    if isinstance(entities, str):
+        try:
+            entities = json.loads(entities)
+        except ValueError:
+            entities = {}
+    if not isinstance(entities, dict):
+        entities = {}
     if kind == "institutions":
-        return [s for s in entities.get("organizations", []) if isinstance(s, str) and s.strip()]
+        return entity_names(entities.get("organizations"))
     if kind != "people":
         return []
-    explicit = entities.get("persons", entities.get("people", []))
-    labels = [s for s in explicit if isinstance(s, str) and s.strip()]
+    labels = entity_names(entities.get("persons")) + entity_names(entities.get("people"))
     if settings.weekly_personas_file.is_file():
         corpus = (
             " "
@@ -49,9 +90,12 @@ def entity_labels(settings, event, kind):
             )
             + " "
         )
+        author = x_author(event)
         for person in load_weekly_persona_registry(settings.weekly_personas_file).personas:
-            names = [person.name, *person.source_strategy.x_handles]
-            if any(" " + normalized(name) + " " in corpus for name in names):
+            names = [person.name, *person.aliases, *person.source_strategy.x_handles]
+            if (
+                author and author in {h.casefold() for h in person.source_strategy.x_handles}
+            ) or any(normalized(name) and " " + normalized(name) + " " in corpus for name in names):
                 labels.append(person.name)
     return list(dict.fromkeys(labels))
 

@@ -192,6 +192,7 @@ class WeeklyPersonaSourceStrategy(BaseModel):
 class WeeklyPersonaConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
+    aliases: list[str] = Field(default_factory=list)
     role: str
     topics: list[str] = Field(default_factory=list)
     source_strategy: WeeklyPersonaSourceStrategy
