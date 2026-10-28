@@ -193,6 +193,8 @@ class WeeklyPersonaSourceStrategy(BaseModel):
 class WeeklyPersonaConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9_]+$")
     name: str
+    menu_label: str | None = None
+    menu_order: int = 100
     aliases: list[str] = Field(default_factory=list)
     role: str
     topics: list[str] = Field(default_factory=list)
@@ -254,6 +256,8 @@ class Settings(BaseSettings):
     daily_personalization_enabled: bool = False
     daily_selection_file: Path = Path("config/daily-selection.yaml")
     menu_preparation_max_cost_usd: float = Field(default=0.05, gt=0, le=0.25)
+    people_search_max_cost_usd: float = Field(default=0.08, gt=0, le=0.25)
+    people_search_cache_minutes: int = Field(default=60, ge=1, le=1440)
     media_max_file_bytes: int = Field(default=1_900_000_000, ge=1_000_000, le=1_900_000_000)
     media_max_storage_bytes: int = Field(default=4_500_000_000, ge=100_000_000)
     media_min_free_bytes: int = Field(default=1_000_000_000, ge=100_000_000)

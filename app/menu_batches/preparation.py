@@ -64,6 +64,7 @@ class PreparationBudget:
         self.settings, self.repository = settings, repository
         self.limit, self.web_reserved = limit, 0.0
         self.web_unknown = 0.0
+        self.independent_web_calls = False
         self.deadline = time.monotonic() + 360
         self.model = PublicationTransport(limit, **({"transport": transport} if transport else {}))
 
@@ -72,7 +73,7 @@ class PreparationBudget:
         if (
             time.monotonic() > self.deadline
             or self.model.snapshot()["unknown_cost_reserved_usd"] > 0
-            or self.web_unknown > 0
+            or (self.web_unknown > 0 and not self.independent_web_calls)
             or charged + self.web_reserved + extra > self.limit + 1e-10
             or self.repository.current_month_cost() + extra >= self.settings.budget_hard_stop_usd
         ):
@@ -247,7 +248,12 @@ def prepare(settings, repository, preparation):
             return
         if batch["kind"] != "youtube" and settings.openrouter_api_key is None:
             raise ValueError("Model access is not configured; no paid preparation dispatched")
-        if batch["kind"] == "bio":
+        if batch.get("persona_id"):
+            from app.menu_batches.people import prepare_people
+
+            budget.deadline = time.monotonic() + 100
+            prepare_people(settings, scoped, batch, budget)
+        elif batch["kind"] == "bio":
             from app.biography.engine import BiographyEngine
             from app.biography.storage import BiographyStore
 
@@ -310,6 +316,8 @@ def prepare(settings, repository, preparation):
                 snapshot.get("unknown_cost_reserved_usd", 0) > 0
                 or snapshot.get("web_unknown_reserved_usd", 0) > 0
             )
+            if batch.get("persona_id") and snapshot.get("unknown_cost_reserved_usd", 0) > 0:
+                status = "uncertain"
             db.execute(
                 "UPDATE menu_preparation_events SET status=? WHERE preparation_id=? "
                 "AND status='running'",

@@ -109,6 +109,64 @@ class BatchStore:
             row = db.execute("SELECT * FROM menu_batches WHERE id=?", (batch_id,)).fetchone()
         return dict(row) if row else None
 
+    def request_person(self, owner, persona_id, request_key, *, now=None):
+        people = load_weekly_persona_registry(self.settings.weekly_personas_file).personas
+        if not any(p.id == persona_id for p in people):
+            raise ValueError("Unknown person")
+        now = now or datetime.now(UTC)
+        end = now.isoformat()
+        with self.repository.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute(
+                "SELECT b.id FROM menu_batches b LEFT JOIN menu_preparations p ON p.batch_id=b.id "
+                "WHERE b.owner_id=? AND b.persona_id=? AND (b.request_key=? OR "
+                "p.status IN('queued','running','uncertain') "
+                "OR julianday(b.created_at)>=julianday(?)) "
+                "ORDER BY b.id DESC LIMIT 1",
+                (
+                    owner,
+                    persona_id,
+                    request_key,
+                    (
+                        now - timedelta(minutes=self.settings.people_search_cache_minutes)
+                    ).isoformat(),
+                ),
+            ).fetchone()
+            if old:
+                return old[0], False
+            limit = self.settings.people_search_max_cost_usd
+            total = db.execute(
+                "SELECT COALESCE(sum(cost_usd),0) FROM usage_ledger "
+                "WHERE strftime('%Y-%m',created_at)=strftime('%Y-%m','now')"
+            ).fetchone()[0]
+            reserved = db.execute(
+                "SELECT COALESCE(sum(limit_usd-cost_usd),0) FROM menu_preparations "
+                "WHERE status IN('queued','running')"
+            ).fetchone()[0]
+            if total + max(0, reserved) + limit >= self.settings.budget_hard_stop_usd:
+                raise ValueError("Monthly search budget exhausted")
+            batch = db.execute(
+                "INSERT INTO menu_batches(owner_id,kind,request_key,period_start,period_end,"
+                "profile_hash,created_at,updated_at,persona_id) "
+                "VALUES(?,'people',?,?,?,'person-search',?,?,?)",
+                (
+                    owner,
+                    request_key,
+                    (now - timedelta(days=30)).isoformat(),
+                    end,
+                    end,
+                    end,
+                    persona_id,
+                ),
+            ).lastrowid
+            db.execute(
+                "INSERT INTO menu_preparations(batch_id,owner_id,status,limit_usd,"
+                "created_at,updated_at) "
+                "VALUES(?,?,'queued',?,?,?)",
+                (batch, owner, limit, end, end),
+            )
+            return batch, True
+
     def items(self, batch_id):
         with self.repository.connection() as db:
             return [
@@ -365,8 +423,12 @@ class BatchStore:
 
     def extend(self, batch_id):
         batch = self.get(batch_id)
-        candidates = self.candidates(
-            batch["owner_id"], batch["kind"], batch["period_start"], batch["period_end"]
+        candidates = (
+            []
+            if batch.get("persona_id")
+            else self.candidates(
+                batch["owner_id"], batch["kind"], batch["period_start"], batch["period_end"]
+            )
         )
         with self.repository.connection() as db:
             db.execute("BEGIN IMMEDIATE")

@@ -37,6 +37,24 @@ def menu_keyboard():
     return b.as_markup()
 
 
+def people_keyboard(settings):
+    from app.menu_batches.people import label, personas
+
+    b = InlineKeyboardBuilder()
+    for person in personas(settings):
+        b.button(text=label(person), callback_data=BatchAction(action="person", value=person.id))
+    b.adjust(2)
+    b.row()
+    b.button(text="Все выпуски", callback_data=BatchAction(action="menu", value="0"))
+    return b.as_markup()
+
+
+PEOPLE_TEXT = (
+    "<b>Люди</b>\n\nВыбери человека. Найду свежие заявления, интервью и публичные действия "
+    "и пришлю до трёх содержательных материалов с источниками."
+)
+
+
 SETTINGS_TEXT = (
     "<b>Управление ОСВЕД</b>\n\n"
     "/sources — источники\n/tgchannels — Telegram-каналы\n/channels — YouTube-каналы\n"
@@ -44,7 +62,7 @@ SETTINGS_TEXT = (
     "/bio status — статус биографий; /bio pause и /bio resume — автоматическая выдача\n"
     "/week — недельная карта\n/people week — прежний недельный обзор людей\n"
     "/download — скачать YouTube или X (до 49 МБ)\n"
-    "/help — помощь\n\n/menu — выпуски"
+    "/retry — незавершённые запросы\n/help — помощь\n\n/menu — выпуски"
 )
 
 
@@ -61,9 +79,22 @@ def batch_text(store, batch):
             f"{datetime.fromisoformat(batch['period_end']).astimezone(MOSCOW):%d.%m %H:%M} МСК"
         )
     )
-    text = f"<b>{KINDS[batch['kind']][0]}</b>\n<i>{period}</i>\n\n"
+    selected_person = None
+    if batch.get("persona_id"):
+        from app.menu_batches.people import label, person
+
+        selected_person = person(store.settings, batch["persona_id"])
+        title = label(selected_person) if selected_person else "Люди"
+        period = "Поиск заявлений, интервью и публичных действий"
+    else:
+        title = KINDS[batch["kind"]][0]
+    text = f"<b>{html.escape(title)}</b>\n<i>{period}</i>\n\n"
     if not items:
-        text += "Новых готовых материалов сейчас нет. Уже присланное повторно не рассылаю."
+        text += (
+            "Ищу и читаю материалы по выбранному человеку…"
+            if selected_person
+            else "Новых готовых материалов сейчас нет. Уже присланное повторно не рассылаю."
+        )
     elif sent == len(items):
         text += f"Выпуск готов: {sent}. Каждый материал — отдельным сообщением."
     else:
@@ -84,7 +115,13 @@ def batch_text(store, batch):
         ).fetchone()
     if prep:
         if prep["status"] in {"queued", "running"}:
-            text += f"\n\nГотовлю новые материалы. Бюджет подготовки: ${prep['limit_usd']:.2f}."
+            text += (
+                "\n\nПоиск в очереди."
+                if selected_person and prep["status"] == "queued"
+                else "\n\nСобираю результат…"
+                if selected_person
+                else f"\n\nГотовлю новые материалы. Бюджет подготовки: ${prep['limit_usd']:.2f}."
+            )
         elif prep["status"] == "offered":
             text += (
                 f"\n\nПодготовить новые по свежим сигналам радара? Бюджет: "
@@ -100,7 +137,14 @@ def batch_text(store, batch):
             }.get(prep["status"], "Подготовка остановлена")
             text += f"\n\n{label}. Учтено с резервами: ${prep['cost_usd']:.4f}."
             if not items:
-                text += " Подходящих готовых материалов пока нет."
+                if selected_person:
+                    text = text.replace("Ищу и читаю материалы по выбранному человеку…", "")
+                    text += (
+                        " Не удалось получить содержательный результат из доступных текстов. "
+                        "Это не означает, что у человека не было заявлений."
+                    )
+                else:
+                    text += " Подходящих готовых материалов пока нет."
     return text
 
 
@@ -110,7 +154,11 @@ def batch_keyboard(store, batch):
         prep = db.execute(
             "SELECT * FROM menu_preparations WHERE batch_id=?", (batch["id"],)
         ).fetchone()
-    if prep and prep["status"] == "offered":
+    if batch.get("persona_id"):
+        b.button(
+            text="Выбрать другого человека", callback_data=BatchAction(action="people", value="0")
+        )
+    elif prep and prep["status"] == "offered":
         b.button(
             text=f"Подготовить · бюджет ${prep['limit_usd']:.2f}",
             callback_data=BatchAction(action="prepare", value=str(batch["id"])),
@@ -160,14 +208,29 @@ def register_batch_handlers(router, settings, repository):
     def private(message, owner):
         return is_allowed(settings, repository, owner) and message.chat.id == owner
 
-    async def issue(message, owner, kind, key):
-        batch_id, created = store.request(owner, kind, key)
+    async def issue(message, owner, kind, key, *, persona_id=None):
+        batch_id, created = (
+            store.request_person(owner, persona_id, key)
+            if persona_id
+            else store.request(owner, kind, key)
+        )
         batch = store.get(batch_id)
         if (
             not created
             and batch["status_message_id"]
             and await refresh_status(message.bot, store, batch_id)
         ):
+            if persona_id:
+                saved_items = store.items(batch_id)
+                await message.answer(
+                    "Поиск по этому человеку уже запускался; повторно не оплачиваю. "
+                    + (
+                        "Готовые материалы находятся выше в чате."
+                        if saved_items
+                        else "Его текущий статус находится выше в чате."
+                    ),
+                    reply_markup=people_keyboard(settings),
+                )
             return
         with repository.connection() as db:
             claimed = db.execute(
@@ -218,6 +281,9 @@ def register_batch_handlers(router, settings, repository):
         if not private(message, owner):
             return
         kind = (message.text or "").split()[0].split("@")[0].lstrip("/")
+        if kind == "people":
+            await message.answer(PEOPLE_TEXT, reply_markup=people_keyboard(settings))
+            return
         await issue(
             message,
             owner,
@@ -232,6 +298,22 @@ def register_batch_handlers(router, settings, repository):
             await query.answer("Недоступно", show_alert=True)
             return
         action, value = callback_data.action, callback_data.value
+        if action == "people" or action == "issue" and value == "people":
+            await query.answer()
+            await query.message.answer(PEOPLE_TEXT, reply_markup=people_keyboard(settings))
+            return
+        if action == "person":
+            from app.menu_batches.people import person
+
+            if not person(settings, value):
+                await query.answer("Этого человека нет в списке", show_alert=True)
+                return
+            await query.answer("Ищу материалы по выбранному человеку")
+            try:
+                await issue(query.message, owner, "people", "person:" + query.id, persona_id=value)
+            except ValueError:
+                await query.message.answer("Поиск остановлен общим месячным лимитом расходов.")
+            return
         if action in {"menu", "settings"}:
             await query.answer()
             # The edition's own status message stays bound to its outbox.
@@ -251,6 +333,14 @@ def register_batch_handlers(router, settings, repository):
             or batch["status_message_id"] != query.message.message_id
         ):
             await query.answer("Этот выпуск недоступен", show_alert=True)
+            return
+        if (
+            batch["kind"] == "people"
+            and not batch.get("persona_id")
+            and action in {"offer", "prepare"}
+        ):
+            await query.answer("Теперь можно искать по конкретному человеку")
+            await query.message.answer(PEOPLE_TEXT, reply_markup=people_keyboard(settings))
             return
         if action == "offer":
             ceiling = (
@@ -403,16 +493,21 @@ class BatchWorker:
             return True
         with self.repository.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            if db.execute(
-                "SELECT 1 FROM schedule_slots WHERE mode='live' "
-                "AND status IN('planned','running') AND "
-                "julianday(created_at)>julianday('now','-15 minutes')"
-            ).fetchone():
-                return False
             prep = db.execute(
-                "SELECT * FROM menu_preparations WHERE status='queued' ORDER BY id LIMIT 1"
+                "SELECT p.*,b.persona_id FROM menu_preparations p "
+                "JOIN menu_batches b ON b.id=p.batch_id WHERE p.status='queued' "
+                "ORDER BY CASE WHEN b.persona_id IS NOT NULL THEN 0 ELSE 1 END,p.id LIMIT 1"
             ).fetchone()
             if not prep:
+                return False
+            if (
+                not prep["persona_id"]
+                and db.execute(
+                    "SELECT 1 FROM schedule_slots WHERE mode='live' "
+                    "AND status IN('planned','running') AND "
+                    "julianday(created_at)>julianday('now','-15 minutes')"
+                ).fetchone()
+            ):
                 return False
             db.execute(
                 "UPDATE menu_preparations SET status='running',updated_at=? WHERE id=?",

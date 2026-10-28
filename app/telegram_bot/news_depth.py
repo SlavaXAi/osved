@@ -22,7 +22,7 @@ def brief_card_html(card: dict[str, Any]) -> str:
     """
     try:
         draft = json.loads(card.get("structured_output_json") or "{}")
-        if isinstance(draft, dict) and draft.get("card_kind") == "concept_brief":
+        if isinstance(draft, dict) and draft.get("card_kind") in {"concept_brief", "people_brief"}:
             return clean_news_html(str(card["rendered_html"]))
         headline = clean_news_text(str(draft["headline"]))
         lead = clean_news_text(str(draft["lead"]))
