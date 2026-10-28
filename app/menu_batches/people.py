@@ -131,7 +131,7 @@ def render(material, documents, persona):
                 dates.append(date.strftime("%d.%m.%Y"))
         except ValueError:
             pass
-    parts = ["<b>" + html.escape(label(persona) + " · " + material.headline) + "</b>"]
+    parts = ["<b>" + html.escape(material.headline) + "</b>"]
     if dates:
         parts.append("<i>Публикация · " + ", ".join(dict.fromkeys(dates)) + "</i>")
     parts += [html.escape(p.text) for p in material.paragraphs]
@@ -178,7 +178,7 @@ def store_material(settings, repo, batch, material, documents, persona, cost):
         **material.model_dump(),
         "card_kind": "people_brief",
         "persona_id": persona.id,
-        "headline": label(persona) + " · " + material.headline,
+        "headline": material.headline,
         "lead": material.paragraphs[0].text,
         "source_mode": "author_analysis",
     }
