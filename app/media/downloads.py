@@ -290,6 +290,8 @@ class Downloader:
             stdout, stderr = await asyncio.gather(out, err)
             if proc.returncode:
                 detail = stderr.decode(errors="replace").lower()
+                if "not a bot" in detail or "confirm you’re not" in detail:
+                    raise MediaError("youtube_blocked")
                 if any(s in detail for s in ["sign in", "login", "private video", "not a bot"]):
                     raise MediaError("login_required")
                 if "429" in detail:
@@ -315,6 +317,8 @@ class Downloader:
             "-m",
             "yt_dlp",
             "--ignore-config",
+            "--js-runtimes",
+            "node",
             "--extractor-args",
             "youtube:player_client=android_vr",
             "--no-warnings",
@@ -334,11 +338,18 @@ class Downloader:
             from app.media.yandex_music import describe
 
             return await asyncio.to_thread(describe, self.settings, req)
-        output = await self.command(
-            self.base_args() + ["--dump-single-json", "--skip-download", req["source_url"]],
-            timeout=90,
-            cancelled=cancelled,
-        )
+        try:
+            output = await self.command(
+                self.base_args() + ["--dump-single-json", "--skip-download", req["source_url"]],
+                timeout=90,
+                cancelled=cancelled,
+            )
+        except MediaError as exc:
+            if self.use_youtube_fallback(req, exc):
+                from app.media.youtube_monid import manifest, source
+
+                return manifest(await source(self, req, cancelled=cancelled))
+            raise
         try:
             raw = json.loads(output)
         except ValueError as exc:
@@ -346,6 +357,13 @@ class Downloader:
         if not isinstance(raw, dict):
             raise MediaError("invalid_response")
         return normalize_info(raw, req["platform"])
+
+    def use_youtube_fallback(self, req, error):
+        return (
+            req["platform"] == "youtube"
+            and self.settings.media_youtube_monid_enabled
+            and error.code in {"youtube_blocked", "rate_limited", "unavailable", "timeout"}
+        )
 
     async def download(self, req, job, *, cancelled=lambda: False):
         if req["platform"] == "yandex_music":
@@ -370,6 +388,13 @@ class Downloader:
                 and path.stat().st_size <= self.max_bytes
             ):
                 return result
+        if (
+            req["platform"] == "youtube"
+            and json.loads(req["manifest_json"]).get("backend") == "monid_youtube"
+        ):
+            from app.media.youtube_monid import download
+
+            return await download(self, req, job, cancelled=cancelled)
         args = self.base_args() + [
             "--no-progress",
             "--max-filesize",
@@ -387,12 +412,19 @@ class Downloader:
             args += ["--extract-audio", "--audio-format", "mp3", "--audio-quality", "128K"]
         else:
             args += ["--merge-output-format", "mkv"]
-        await self.command(
-            args + [req["source_url"]],
-            timeout=self.settings.media_timeout_seconds,
-            cancelled=cancelled,
-            directory=directory,
-        )
+        try:
+            await self.command(
+                args + [req["source_url"]],
+                timeout=self.settings.media_timeout_seconds,
+                cancelled=cancelled,
+                directory=directory,
+            )
+        except MediaError as exc:
+            if self.use_youtube_fallback(req, exc):
+                from app.media.youtube_monid import download
+
+                return await download(self, req, job, cancelled=cancelled)
+            raise
         paths = [
             p
             for p in directory.glob("source.*")
@@ -488,4 +520,7 @@ class Downloader:
                 and int(path.name[4:]) not in active_ids
                 and path.stat().st_mtime < cutoff
             ):
+                shutil.rmtree(path)
+        for path in (self.root / "youtube").glob("*"):
+            if path.is_dir() and path.stat().st_mtime < cutoff:
                 shutil.rmtree(path)

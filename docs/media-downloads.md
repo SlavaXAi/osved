@@ -94,8 +94,24 @@ Telegram becomes `uncertain`; it is not silently sent again. A crash while
 preparing a file resumes from the durable job and can reuse a completed local
 file. Keep the database and media directory outside disposable containers.
 
-The current release deliberately does not depend on Monid. The API catalog is
-not proof that returned YouTube URLs can be downloaded from the server's IP.
+`MEDIA_YOUTUBE_MONID_ENABLED=true` enables an on-demand Monid fallback when
+YouTube blocks direct access. It resolves one public video through MrScraper,
+checks the returned file with ffprobe, and offers only its actual resolution
+and lower resolutions plus MP3. Metadata listing 1080p does not prove the
+returned file is 1080p; the current provider may supply a 480p file.
+
+Before a paid dispatch the resolver checks the live per-call price (at most
+$0.01) and the common monthly budget. A durable reservation, run ID, raw receipt,
+and source-file cache survive restarts. Known pending runs resume by reading
+their status; an unknown POST result cannot trigger an automatic second payment.
+Paid answers are saved before parsing. Repeated sends reuse Telegram file IDs.
+Temporary source files are retained for up to 24 hours and count toward storage
+limits. Downloading is limited to explicit links/buttons; feeds are not downloaded.
+
+The S3 source can be larger than the final Telegram file but is capped at 500 MB
+and the configured media-file ceiling. The final cloud Bot API limit stays
+49 MB; no splitting or upscaling is performed. HD direct stream URLs from another
+network may return 403. A separate fixed-exit proxy for HD is not configured.
 
 Official references: [Telegram files](https://core.telegram.org/bots/api#sending-files),
 [local Bot API](https://github.com/tdlib/telegram-bot-api),

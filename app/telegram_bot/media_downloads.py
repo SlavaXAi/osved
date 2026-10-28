@@ -33,6 +33,28 @@ ERRORS = {
     "music_preview_only": "Яндекс вернул только фрагмент песни. Короткую версию не отправляю.",
     "music_cover_unavailable": "Не удалось получить обложку. Попробуй позже.",
     "login_required": "Источник требует авторизацию. Файл пока не удалось получить.",
+    "youtube_blocked": "YouTube ограничил прямое скачивание с сервера.",
+    "provider_unavailable": (
+        "Сервис не предоставил доступный файл. "
+        "Сохранённый ответ можно проверить без повторной оплаты."
+    ),
+    "media_paid_uncertain": (
+        "Статус платного запроса не подтверждён. "
+        "Повторная оплата заблокирована; запрос сохранён для проверки."
+    ),
+    "media_provider_pending": (
+        "Сервис ещё готовит файл. Нажми «Повторить» позже — "
+        "продолжу тот же запрос без новой оплаты."
+    ),
+    "media_budget_blocked": "Достигнут лимит расходов на скачивание. Запрос сохранён.",
+    "monid_control_blocked": (
+        "Monid остановил запрос своим лимитом. "
+        "Проверить или изменить его можно на https://app.monid.ai, затем повторить запрос."
+    ),
+    "quality_unavailable": (
+        "Выбранное качество сервис не предоставил. "
+        "Список обновлён: выбери доступное разрешение или MP3."
+    ),
     "rate_limited": "Источник временно ограничил запросы. Автоповтор выключен.",
     "unavailable": "Не удалось получить файл: источник недоступен или ограничил загрузку.",
     "no_video": "В этой публикации нет доступного видео.",
@@ -482,12 +504,16 @@ class MediaWorker:
                     )
                     sent_file = msg.audio
                 else:
+                    extra = {}
+                    if result.get("thumbnail_path") and not cached:
+                        extra["thumbnail"] = FSInputFile(result["thumbnail_path"])
                     msg = await self.bot.send_video(
                         video=file,
                         supports_streaming=True,
                         width=result["width"],
                         height=result["height"],
                         duration=result["duration"],
+                        **extra,
                         **common,
                     )
                     sent_file = msg.video
@@ -567,7 +593,7 @@ class MediaWorker:
         await show(
             self.bot,
             self.repository,
-            req,
+            get_request(self.repository, req["id"]),
             self.settings,
             ERRORS.get(code, "Не удалось получить файл. Автоповтор выключен."),
         )

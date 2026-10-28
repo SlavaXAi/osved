@@ -17,7 +17,8 @@ dependencies = [
   "Telethon>=1.44,<2",
   "typer>=0.16,<1",
   "reportlab>=4.4,<5",
-  "yt-dlp==2025.10.14",
+  "yt-dlp==2026.10.26",
+  "yt-dlp-ejs==0.8.0",
   "yandex-music==3.2.2",
 ]
 

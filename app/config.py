@@ -271,6 +271,7 @@ class Settings(BaseSettings):
     openrouter_fallback_model: str | None = "openai/gpt-4.1-mini"
     openrouter_search_model: str = "openai/gpt-5.6-luna"
     monid_api_key: SecretStr | None = None
+    media_youtube_monid_enabled: bool = False
     youtube_rss_fallback_enabled: bool = False
 
     # Legacy setting is accepted for compatibility; selection uses relevance, not time.
